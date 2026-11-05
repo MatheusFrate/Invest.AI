@@ -1,0 +1,48 @@
+# ==========================================
+# DADOS PESSOAIS E FINANCEIROS (NUNCA SUBIR)
+# ==========================================
+*.xlsx
+*.xls
+*.csv
+data/investimento.xlsx
+!data/investimento_exemplo.xlsx
+
+# ==========================================
+# CHAVES DE API E VARIÁVEIS DE AMBIENTE
+# ==========================================
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# AMBIENTE VIRTUAL E DEPENDÊNCIAS
+# ==========================================
+.venv/
+venv/
+env/
+ENV/
+*.pyc
+__pycache__/
+*.py[cod]
+*.egg-info/
+src/*.egg-info/
+
+# ==========================================
+# BUILDS E EXECUTÁVEIS DO APP
+# ==========================================
+build/
+dist/
+*.exe
+
+# ==========================================
+# ARQUIVOS DE IDE E SISTEMA
+# ==========================================
+.vscode/
+.idea/
+.pytest_cache
+*.log
+Thumbs.db
+Desktop.ini
+
+
+*PROJETO.md
