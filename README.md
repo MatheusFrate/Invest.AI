@@ -1,6 +1,6 @@
 # 📈 InvestDARF • AI Copilot com PydanticAI
 
-[![CI - Testes](https://github.com/seu-usuario/investdarf-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/seu-usuario/investdarf-ai/actions)
+[![CI - Testes](https://github.com/MatheusFrate/Invest.AI/actions/workflows/ci.yml/badge.svg)](https://github.com/MatheusFrate/Invest.AI/actions)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Pydantic v2](https://img.shields.io/badge/Pydantic-v2.14-e92063.svg)
 ![PydanticAI](https://img.shields.io/badge/PydanticAI-v2.66-3b82f6.svg)
