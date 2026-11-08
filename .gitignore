@@ -4,6 +4,8 @@
 *.xlsx
 *.xls
 *.csv
+*.pdf
+data/notas/
 data/investimento.xlsx
 !data/investimento_exemplo.xlsx
 

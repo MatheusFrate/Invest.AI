@@ -10,7 +10,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.fallback import FallbackModel
 
 from invest_ai.agent.deps import InvestContext
-from invest_ai.agent.schemas import TransactionSchema
+from invest_ai.agent.schemas import TransactionSchema, BrokerageNoteSchema
 from invest_ai.agent.tools import (
     obter_cotacao_b3,
     consultar_posicao_carteira,
@@ -138,6 +138,57 @@ def criar_agente_assistente(model: Optional[Union[str, FallbackModel, any]] = No
     return agente
 
 
+# =====================================================================
+# 3. Agente Extrator de Notas de Corretagem B3 (Layout SINACOR)
+# =====================================================================
+PROMPT_EXTRATOR_NOTA_CORRETAGEM = """
+Você é um auditor contábil e fiscal especializado em decodificar Notas de Corretagem da B3 (padrão SINACOR e variantes modernas).
+Sua missão é extrair rigorosamente os dados da nota de corretagem a partir do texto do documento.
+
+Diretrizes obrigatórias:
+1. Cabeçalho da Nota:
+   - Identifique o Número da Nota (Nr. nota / Número da Nota).
+   - Identifique a Data do Pregão (Data Pregão / Pregão). Converta sempre para o formato YYYY-MM-DD.
+   - Identifique a Corretora / Razão Social (ex: XP Investimentos, Clear Corretora, BTG Pactual, NuInvest, Rico, Toro, Inter). Extraia o nome usual da instituição.
+2. Tabela de Operações / Negócios Realizados:
+   - Para cada linha de negócio na nota:
+     * Operação: Se indicado "C" ou "Compra", defina como "compra". Se "V" ou "Venda", defina como "venda".
+     * Ticker do Ativo: Identifique o código de negociação B3 (ex: PETR4, VALE3, MXRF11, KNIP11, IVVB11).
+       Caso o texto apresente a especificação do título (ex: "PETROBRAS PN", "VALE ON", "MAXI RENDA FII", "KINEA RENDA FII"), converta para o ticker correspondente (ex: PETR4, VALE3, MXRF11, KNIP11).
+       Se o ativo já estiver em código alfanumérico (ex: PETR4), mantenha em maiúsculas.
+     * Tipo de Ativo: Ações com final 3 ou 4 ("ação"), fundos imobiliários com final 11 ("fii"), ETFs com final 11 se fundo de índice ("etf"), BDRs com final 34 ("bdr").
+     * Quantidade: Quantidade negociada (maior que zero).
+     * Preço Unitário: Preço / Ajuste / Cotação unitária da operação em reais.
+     * Valor Total: Valor da Operação / Valor Total. Garanta coerência matemática: quantidade * valor_unitario = valor_total.
+3. Custos Operacionais e Emolumentos:
+   - Some todas as taxas e despesas da nota no campo total_custos_emolumentos:
+     * Taxa de liquidação
+     * Taxa de registro
+     * Emolumentos B3
+     * Taxa de corretagem / Corretagem
+     * Impostos/Tributos (ISS, PIS, COFINS)
+     * Outras despesas/taxa de custódia
+4. Todas as operações da tabela de negócios devem ser extraídas na lista transacoes. Não omita nenhuma linha negociada.
+"""
+
+
+def criar_agente_nota_corretagem(model: Optional[Union[str, FallbackModel, any]] = None) -> Agent[None, BrokerageNoteSchema]:
+    """
+    Cria o agente responsável por extrair dados estruturados de Notas de Corretagem SINACOR/B3.
+    """
+    modelo_ativo = model or resolver_modelo_padrao()
+
+    agente = Agent(
+        modelo_ativo,
+        output_type=BrokerageNoteSchema,
+        system_prompt=PROMPT_EXTRATOR_NOTA_CORRETAGEM,
+        retries=3
+    )
+
+    return agente
+
+
 # Instâncias padrão prontas para importação direta
 transaction_agent = criar_agente_transacao()
 assistant_agent = criar_agente_assistente()
+brokerage_note_agent = criar_agente_nota_corretagem()
