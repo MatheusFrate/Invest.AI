@@ -16,7 +16,12 @@ from invest_ai.ui.base_window import InvestApp
 from invest_ai.agent.deps import InvestContext
 from invest_ai.agent.agent import transaction_agent, assistant_agent, brokerage_note_agent, resolver_modelo_padrao
 from invest_ai.agent.schemas import TransactionSchema, BrokerageNoteSchema
-from invest_ai.services.excel_handler import DEFAULT_EXCEL_PATH, save_transaction_to_excel
+from invest_ai.services.excel_handler import (
+    DEFAULT_EXCEL_PATH,
+    save_transaction_to_excel,
+    save_transactions_batch_to_excel,
+    normalizar_todas_datas_planilha
+)
 from invest_ai.services.pdf_extractor import extrair_texto_pdf
 
 
@@ -37,6 +42,11 @@ class InvestAIApp(InvestApp):
 
         self._reorganize_sidebar_for_ai()
         self._add_copiloto_view()
+
+        # Higieniza datas antigas YYYY-MM-DD na planilha para DD/MM/AAAA se houver
+        corrigidas = normalizar_todas_datas_planilha(DEFAULT_EXCEL_PATH)
+        if corrigidas > 0:
+            self.load_data()
 
         # Abre diretamente na tela do Copiloto IA por padrão
         self.show_view("copiloto")
@@ -290,15 +300,24 @@ class InvestAIApp(InvestApp):
         """Salva a transação confirmada pelo usuário no Excel e atualiza a carteira."""
         try:
             engine_tx = tx.to_engine_transaction()
-            save_transaction_to_excel(engine_tx, DEFAULT_EXCEL_PATH)
+            foi_salvo = save_transaction_to_excel(engine_tx, DEFAULT_EXCEL_PATH, prevent_duplicates=True)
+
+            card_widget.destroy()
+
+            if not foi_salvo:
+                self._add_bot_message(
+                    f"⚠️ Operação NÃO gravada pois já existe uma movimentação idêntica na planilha:\n\n"
+                    f"• {tx.operacao.value.upper()} de {tx.quantidade:g} {tx.ticker} em {tx.data} no valor de R$ {tx.valor_total:.2f}.\n\n"
+                    f"Linhas duplicadas são bloqueadas para manter a apuração fiscal e o preço médio corretos."
+                )
+                return
 
             self.load_data()
             self.refresh_quotes_async()
 
-            card_widget.destroy()
             self._add_bot_message(
                 f"OK! Operação registrada com sucesso!\n\n"
-                f"Foram gravadas {tx.quantidade:.2f} de {tx.ticker} na sua planilha.\n"
+                f"Foram gravadas {tx.quantidade:g} de {tx.ticker} na sua planilha (Data: {tx.data}).\n"
                 f"Sua carteira e preço médio já foram atualizados. Visite a aba Carteira Atual para conferir!"
             )
         except Exception as e:
@@ -412,30 +431,46 @@ class InvestAIApp(InvestApp):
         self.chat_scroll.after(100, lambda: self.chat_scroll._parent_canvas.yview_moveto(1.0))
 
     def _confirm_and_save_brokerage_note(self, card_widget, nota: BrokerageNoteSchema):
-        """Salva todas as transações da nota de corretagem no Excel e atualiza a carteira."""
+        """Salva as transações da nota de corretagem no Excel sem duplicar e atualiza a carteira."""
         try:
-            total_ops = len(nota.transacoes)
-            for tx in nota.transacoes:
-                engine_tx = tx.to_engine_transaction()
-                save_transaction_to_excel(engine_tx, DEFAULT_EXCEL_PATH)
+            engine_txs = [tx.to_engine_transaction() for tx in nota.transacoes]
+            salvas, ignoradas = save_transactions_batch_to_excel(
+                engine_txs,
+                DEFAULT_EXCEL_PATH,
+                prevent_duplicates=True
+            )
 
             self.load_data()
             self.refresh_quotes_async()
 
             card_widget.destroy()
 
+            if salvas == 0:
+                self._add_bot_message(
+                    f"ℹ️ Nenhuma nova operação foi gravada:\n\n"
+                    f"Todas as {len(nota.transacoes)} operações desta nota (Pregão: {nota.data_pregao}) "
+                    f"já constavam na planilha. A duplicação de dados foi evitada!"
+                )
+                return
+
             resumo_linhas = "\n".join(
                 f"• [{t.operacao.value.upper()}] {t.quantidade:g} {t.ticker} @ R$ {t.valor_unitario:.2f}"
                 for t in nota.transacoes
             )
-            self._add_bot_message(
+            msg_sucesso = (
                 f"OK! Nota de corretagem processada com sucesso!\n\n"
                 f"• Corretora: {nota.corretora or 'Não informada'}\n"
                 f"• Data do Pregão: {nota.data_pregao}\n"
-                f"• Total de Custos/Taxas: R$ {nota.total_custos_emolumentos:.2f}\n"
-                f"• Operações gravadas ({total_ops}):\n{resumo_linhas}\n\n"
-                f"Sua carteira e preços médios foram atualizados. Confira na aba 'Carteira Atual'!"
+                f"• Operações novas gravadas: {salvas}\n"
             )
+            if ignoradas > 0:
+                msg_sucesso += f"• Operações duplicadas ignoradas: {ignoradas}\n"
+            msg_sucesso += (
+                f"• Total de Custos/Taxas: R$ {nota.total_custos_emolumentos:.2f}\n"
+                f"• Operações da nota:\n{resumo_linhas}\n\n"
+                f"Sua carteira e preços médios foram recalculados. Confira na aba 'Carteira Atual'!"
+            )
+            self._add_bot_message(msg_sucesso)
         except Exception as e:
             messagebox.showerror("Erro ao Salvar Nota", f"Não foi possível gravar as operações da nota:\n{e}")
 

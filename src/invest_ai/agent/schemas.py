@@ -41,8 +41,8 @@ class TransactionSchema(BaseModel):
         description="Operação realizada: 'compra' ou 'venda'."
     )
     data: str = Field(
-        default_factory=lambda: date.today().strftime("%Y-%m-%d"),
-        description="Data da transação no formato YYYY-MM-DD."
+        default_factory=lambda: date.today().strftime("%d/%m/%Y"),
+        description="Data da transação no formato DD/MM/AAAA."
     )
     quantidade: float = Field(
         ...,
@@ -85,15 +85,15 @@ class TransactionSchema(BaseModel):
         if "/" in v_clean:
             try:
                 dt = datetime.strptime(v_clean, "%d/%m/%Y")
-                return dt.strftime("%Y-%m-%d")
+                return dt.strftime("%d/%m/%Y")
             except ValueError:
                 pass
         try:
             dt = datetime.strptime(v_clean, "%Y-%m-%d")
-            return dt.strftime("%Y-%m-%d")
+            return dt.strftime("%d/%m/%Y")
         except ValueError:
             raise ValueError(
-                f"Data '{v}' em formato inválido. Use 'YYYY-MM-DD' ou 'DD/MM/YYYY'."
+                f"Data '{v}' em formato inválido. Use 'DD/MM/AAAA' ou 'YYYY-MM-DD'."
             )
 
     @model_validator(mode="after")
@@ -171,7 +171,7 @@ class BrokerageNoteSchema(BaseModel):
     )
     data_pregao: str = Field(
         ...,
-        description="Data do pregão da nota no formato YYYY-MM-DD."
+        description="Data do pregão da nota no formato DD/MM/AAAA."
     )
     corretora: Optional[str] = Field(
         default=None,
@@ -194,23 +194,24 @@ class BrokerageNoteSchema(BaseModel):
         if "/" in v_clean:
             try:
                 dt = datetime.strptime(v_clean, "%d/%m/%Y")
-                return dt.strftime("%Y-%m-%d")
+                return dt.strftime("%d/%m/%Y")
             except ValueError:
                 pass
         try:
             dt = datetime.strptime(v_clean, "%Y-%m-%d")
-            return dt.strftime("%Y-%m-%d")
+            return dt.strftime("%d/%m/%Y")
         except ValueError:
             raise ValueError(
-                f"Data do pregão '{v}' em formato inválido. Use 'YYYY-MM-DD' ou 'DD/MM/YYYY'."
+                f"Data do pregão '{v}' em formato inválido. Use 'DD/MM/AAAA' ou 'YYYY-MM-DD'."
             )
 
     @model_validator(mode="after")
     def sincronizar_dados_transacoes(self) -> "BrokerageNoteSchema":
+        hoje_br = date.today().strftime("%d/%m/%Y")
         for tx in self.transacoes:
             if not tx.corretora and self.corretora:
                 tx.corretora = self.corretora
-            if self.data_pregao and (not tx.data or tx.data == date.today().strftime("%Y-%m-%d")):
+            if self.data_pregao and (not tx.data or tx.data == hoje_br):
                 tx.data = self.data_pregao
         return self
 

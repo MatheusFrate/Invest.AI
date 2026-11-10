@@ -64,7 +64,7 @@ Diretrizes obrigatórias:
 3. Identifique a operação: "compra" ou "venda".
 4. Extraia a quantidade negociada.
 5. Extraia o valor unitário e/ou valor total. Lembre-se: quantidade * valor_unitario DEVE ser igual ao valor_total.
-6. A data deve ser formatada como YYYY-MM-DD. Se o usuário disser "hoje" ou omitir a data, use a data atual.
+6. A data deve ser formatada como DD/MM/AAAA (ex: 15/10/2026). Se o usuário disser "hoje" ou omitir a data, use a data atual nesse formato brasileiro.
 7. Se identificar a corretora (ex: NuInvest, XP, Rico, Clear), preencha o campo correspondente.
 8. Se houver qualquer divergência matemática ou formato inválido, ajuste antes de finalizar o schema.
 """
@@ -148,7 +148,7 @@ Sua missão é extrair rigorosamente os dados da nota de corretagem a partir do 
 Diretrizes obrigatórias:
 1. Cabeçalho da Nota:
    - Identifique o Número da Nota (Nr. nota / Número da Nota).
-   - Identifique a Data do Pregão (Data Pregão / Pregão). Converta sempre para o formato YYYY-MM-DD.
+   - Identifique a Data do Pregão (Data Pregão / Pregão). Converta sempre para o formato DD/MM/AAAA (ex: 19/10/2026).
    - Identifique a Corretora / Razão Social (ex: XP Investimentos, Clear Corretora, BTG Pactual, NuInvest, Rico, Toro, Inter). Extraia o nome usual da instituição.
 2. Tabela de Operações / Negócios Realizados:
    - Para cada linha de negócio na nota:

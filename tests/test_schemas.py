@@ -22,7 +22,7 @@ def test_transacao_valida_completa():
     assert tx.tipo_ativo == TipoAtivo.ACAO
     assert tx.quantidade == 10
     assert tx.valor_total == 385.00
-    assert tx.data == "2026-11-04"
+    assert tx.data == "04/11/2026"
 
 
 def test_auto_calculo_valor_total():
@@ -78,3 +78,4 @@ def test_conversao_para_engine_legado():
     assert engine_tx.quantidade == 20.0
     assert engine_tx.valor_total == 280.0
     assert engine_tx.valor_unitario == 14.0
+    assert engine_tx.data == "04/11/2026"

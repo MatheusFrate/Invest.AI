@@ -3,10 +3,77 @@ Módulo para ler, salvar, editar e excluir movimentações no Excel (investiment
 """
 
 import os
+from datetime import datetime, date
 import openpyxl
-from typing import List
+from typing import List, Tuple, Optional
 from invest_ai.core.engine import Transaction
 from invest_ai.config import DEFAULT_EXCEL_PATH
+
+
+def normalizar_data_br(data_val: any) -> str:
+    """
+    Normaliza formatos de data (datetime, date, YYYY-MM-DD ou DD/MM/YYYY)
+    para o formato padrão brasileiro DD/MM/AAAA.
+    """
+    if not data_val:
+        return ""
+    if isinstance(data_val, (datetime, date)):
+        return data_val.strftime("%d/%m/%Y")
+
+    val_str = str(data_val).strip()
+    if not val_str:
+        return ""
+
+    # Se for YYYY-MM-DD (com ou sem horário)
+    if "-" in val_str:
+        data_pura = val_str.split()[0]
+        partes = data_pura.split("-")
+        if len(partes) == 3 and len(partes[0]) == 4:
+            try:
+                dt = datetime.strptime(data_pura, "%Y-%m-%d")
+                return dt.strftime("%d/%m/%Y")
+            except ValueError:
+                pass
+
+    # Se já for DD/MM/YYYY (com ou sem horário)
+    if "/" in val_str:
+        data_pura = val_str.split()[0]
+        partes = data_pura.split("/")
+        if len(partes) == 3:
+            try:
+                dt = datetime.strptime(data_pura, "%d/%m/%Y")
+                return dt.strftime("%d/%m/%Y")
+            except ValueError:
+                pass
+
+    return val_str
+
+
+def is_duplicate_transaction(tx: Transaction, existing_transactions: List[Transaction]) -> bool:
+    """
+    Verifica se uma transação já existe em uma lista de transações da planilha.
+    Compara ticker, operação, data normalizada (DD/MM/AAAA), quantidade e valores.
+    """
+    tx_data_norm = normalizar_data_br(tx.data)
+    tx_ticker = tx.ticker.strip().upper()
+    tx_operacao = tx.operacao.strip().lower()
+
+    for ext in existing_transactions:
+        if ext.ticker.strip().upper() != tx_ticker:
+            continue
+        if ext.operacao.strip().lower() != tx_operacao:
+            continue
+        if normalizar_data_br(ext.data) != tx_data_norm:
+            continue
+        if abs(ext.quantidade - tx.quantidade) > 0.0001:
+            continue
+        # Verifica se o valor financeiro é compatível (total ou unitário)
+        valor_total_match = abs(ext.valor_total - tx.valor_total) <= 0.05
+        valor_unit_match = abs(ext.valor_unitario - tx.valor_unitario) <= 0.02
+        if valor_total_match or valor_unit_match:
+            return True
+
+    return False
 
 
 def load_transactions_from_excel(filepath: str = DEFAULT_EXCEL_PATH) -> List[Transaction]:
@@ -63,8 +130,8 @@ def load_transactions_from_excel(filepath: str = DEFAULT_EXCEL_PATH) -> List[Tra
                 tag = 'fii'
 
             data_str = ""
-            if col_data != -1 and len(row) > col_data and row[col_data]:
-                data_str = str(row[col_data]).strip()
+            if col_data != -1 and len(row) > col_data and row[col_data] is not None:
+                data_str = normalizar_data_br(row[col_data])
 
             tx = Transaction(
                 id=row_idx,  # guarda o número da linha no Excel para edição/exclusão direta
@@ -83,7 +150,21 @@ def load_transactions_from_excel(filepath: str = DEFAULT_EXCEL_PATH) -> List[Tra
     return transactions
 
 
-def save_transaction_to_excel(tx: Transaction, filepath: str = DEFAULT_EXCEL_PATH):
+def save_transaction_to_excel(
+    tx: Transaction,
+    filepath: str = DEFAULT_EXCEL_PATH,
+    prevent_duplicates: bool = True
+) -> bool:
+    """
+    Salva uma transação no Excel mantendo a data no formato DD/MM/AAAA.
+    Se prevent_duplicates for True, evita duplicar operações idênticas na planilha.
+    Retorna True se gravado, False se ignorado por duplicidade.
+    """
+    if prevent_duplicates and os.path.exists(filepath):
+        existentes = load_transactions_from_excel(filepath)
+        if is_duplicate_transaction(tx, existentes):
+            return False
+
     if not os.path.exists(filepath):
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -93,6 +174,7 @@ def save_transaction_to_excel(tx: Transaction, filepath: str = DEFAULT_EXCEL_PAT
         wb = openpyxl.load_workbook(filepath)
         ws = _get_movimentacoes_sheet(wb)
 
+    data_formatada = normalizar_data_br(tx.data)
     ws.append([
         tx.ticker.lower(),
         tx.quantidade,
@@ -100,9 +182,104 @@ def save_transaction_to_excel(tx: Transaction, filepath: str = DEFAULT_EXCEL_PAT
         round(tx.valor_unitario, 4),
         tx.tipo_ativo,
         tx.operacao,
-        tx.data
+        data_formatada
     ])
     wb.save(filepath)
+    return True
+
+
+def save_transactions_batch_to_excel(
+    txs: List[Transaction],
+    filepath: str = DEFAULT_EXCEL_PATH,
+    prevent_duplicates: bool = True
+) -> Tuple[int, int]:
+    """
+    Salva uma lista de transações em lote no Excel com formato DD/MM/AAAA.
+    Verifica duplicatas contra a planilha e dentro do próprio lote.
+    Retorna: (total_salvas, total_duplicadas_ignoradas).
+    """
+    if not txs:
+        return 0, 0
+
+    if not os.path.exists(filepath):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "movimentações"
+        ws.append(["Cota", "quantidade", "valor total", "valor da cota", "tag", "operação", "data"])
+        existentes: List[Transaction] = []
+    else:
+        wb = openpyxl.load_workbook(filepath)
+        ws = _get_movimentacoes_sheet(wb)
+        existentes = load_transactions_from_excel(filepath) if prevent_duplicates else []
+
+    salvas = 0
+    duplicadas = 0
+
+    for tx in txs:
+        if prevent_duplicates and is_duplicate_transaction(tx, existentes):
+            duplicadas += 1
+            continue
+
+        data_formatada = normalizar_data_br(tx.data)
+        ws.append([
+            tx.ticker.lower(),
+            tx.quantidade,
+            round(tx.valor_total, 2),
+            round(tx.valor_unitario, 4),
+            tx.tipo_ativo,
+            tx.operacao,
+            data_formatada
+        ])
+        if prevent_duplicates:
+            existentes.append(tx)
+        salvas += 1
+
+    if salvas > 0:
+        wb.save(filepath)
+
+    return salvas, duplicadas
+
+
+def normalizar_todas_datas_planilha(filepath: str = DEFAULT_EXCEL_PATH) -> int:
+    """
+    Higieniza a planilha de movimentações existente, convertendo quaisquer datas
+    em formato YYYY-MM-DD para o formato padrão brasileiro DD/MM/AAAA.
+    Retorna a quantidade de células corrigidas.
+    """
+    if not os.path.exists(filepath):
+        return 0
+
+    wb = openpyxl.load_workbook(filepath)
+    ws = _get_movimentacoes_sheet(wb)
+
+    header = [str(c).lower().strip() if c else "" for c in next(ws.iter_rows(values_only=True))]
+    col_data_idx = -1
+    for idx, h in enumerate(header, 1):
+        if "data" in h:
+            col_data_idx = idx
+            break
+    if col_data_idx == -1 and len(header) >= 7:
+        col_data_idx = 7
+
+    if col_data_idx == -1:
+        return 0
+
+    corrigidas = 0
+    for row in range(2, ws.max_row + 1):
+        cell = ws.cell(row=row, column=col_data_idx)
+        val = cell.value
+        if val is not None:
+            val_str = str(val).strip()
+            if "-" in val_str:
+                norm = normalizar_data_br(val_str)
+                if norm != val_str:
+                    cell.value = norm
+                    corrigidas += 1
+
+    if corrigidas > 0:
+        wb.save(filepath)
+
+    return corrigidas
 
 
 def update_transaction_in_excel(tx: Transaction, filepath: str = DEFAULT_EXCEL_PATH):
@@ -120,7 +297,7 @@ def update_transaction_in_excel(tx: Transaction, filepath: str = DEFAULT_EXCEL_P
     ws.cell(row=row, column=4, value=round(tx.valor_unitario, 4))
     ws.cell(row=row, column=5, value=tx.tipo_ativo)
     ws.cell(row=row, column=6, value=tx.operacao)
-    ws.cell(row=row, column=7, value=tx.data)
+    ws.cell(row=row, column=7, value=normalizar_data_br(tx.data))
 
     wb.save(filepath)
 
