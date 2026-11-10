@@ -41,8 +41,8 @@ class TransactionSchema(BaseModel):
         description="Operação realizada: 'compra' ou 'venda'."
     )
     data: str = Field(
-        default_factory=lambda: date.today().strftime("%Y-%m-%d"),
-        description="Data da transação no formato YYYY-MM-DD."
+        default_factory=lambda: date.today().strftime("%d/%m/%Y"),
+        description="Data da transação no formato DD/MM/AAAA."
     )
     quantidade: float = Field(
         ...,
@@ -85,15 +85,15 @@ class TransactionSchema(BaseModel):
         if "/" in v_clean:
             try:
                 dt = datetime.strptime(v_clean, "%d/%m/%Y")
-                return dt.strftime("%Y-%m-%d")
+                return dt.strftime("%d/%m/%Y")
             except ValueError:
                 pass
         try:
             dt = datetime.strptime(v_clean, "%Y-%m-%d")
-            return dt.strftime("%Y-%m-%d")
+            return dt.strftime("%d/%m/%Y")
         except ValueError:
             raise ValueError(
-                f"Data '{v}' em formato inválido. Use 'YYYY-MM-DD' ou 'DD/MM/YYYY'."
+                f"Data '{v}' em formato inválido. Use 'DD/MM/AAAA' ou 'YYYY-MM-DD'."
             )
 
     @model_validator(mode="after")
@@ -158,3 +158,60 @@ class TaxSimulationResponse(BaseModel):
         ...,
         description="Explicação clara das regras tributárias aplicadas (isenção 20k para ações, 20% para FIIs, etc.)."
     )
+
+
+class BrokerageNoteSchema(BaseModel):
+    """
+    Schema para leitura e estruturação de Notas de Corretagem da B3 (padrão SINACOR).
+    Agrupa os dados do pregão, corretora, taxas da B3/corretagem e operações individuais.
+    """
+    numero_nota: Optional[str] = Field(
+        default=None,
+        description="Número da nota de corretagem identificado no cabeçalho."
+    )
+    data_pregao: str = Field(
+        ...,
+        description="Data do pregão da nota no formato DD/MM/AAAA."
+    )
+    corretora: Optional[str] = Field(
+        default=None,
+        description="Nome ou razão social da corretora emissora (ex: XP, Clear, BTG, NuInvest, Rico)."
+    )
+    total_custos_emolumentos: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Soma total das taxas de liquidação, emolumentos B3, taxas de corretagem e tributos (ISS/PIS/COFINS)."
+    )
+    transacoes: list[TransactionSchema] = Field(
+        default_factory=list,
+        description="Lista de operações individuais (compra/venda) encontradas na nota."
+    )
+
+    @field_validator("data_pregao")
+    @classmethod
+    def formatar_data_pregao(cls, v: str) -> str:
+        v_clean = v.strip()
+        if "/" in v_clean:
+            try:
+                dt = datetime.strptime(v_clean, "%d/%m/%Y")
+                return dt.strftime("%d/%m/%Y")
+            except ValueError:
+                pass
+        try:
+            dt = datetime.strptime(v_clean, "%Y-%m-%d")
+            return dt.strftime("%d/%m/%Y")
+        except ValueError:
+            raise ValueError(
+                f"Data do pregão '{v}' em formato inválido. Use 'DD/MM/AAAA' ou 'YYYY-MM-DD'."
+            )
+
+    @model_validator(mode="after")
+    def sincronizar_dados_transacoes(self) -> "BrokerageNoteSchema":
+        hoje_br = date.today().strftime("%d/%m/%Y")
+        for tx in self.transacoes:
+            if not tx.corretora and self.corretora:
+                tx.corretora = self.corretora
+            if self.data_pregao and (not tx.data or tx.data == hoje_br):
+                tx.data = self.data_pregao
+        return self
+

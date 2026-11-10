@@ -17,6 +17,7 @@ dependencies = [
     "pandas>=2.2.0",
     "customtkinter>=5.2.0",
     "rich>=13.0.0",
+    "pypdf>=5.0.0",
 ]
 
 [project.optional-dependencies]
