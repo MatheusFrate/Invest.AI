@@ -14,6 +14,9 @@ from invest_ai.agent.tools import (
     consultar_posicao_carteira,
     listar_resumo_carteira,
     simular_impacto_darf,
+    consultar_proventos_periodo,
+    calcular_yield_on_cost,
+    resumir_maiores_pagadores,
 )
 from invest_ai.agent.agent import (
     resolver_modelo_padrao,
@@ -33,6 +36,9 @@ __all__ = [
     "consultar_posicao_carteira",
     "listar_resumo_carteira",
     "simular_impacto_darf",
+    "consultar_proventos_periodo",
+    "calcular_yield_on_cost",
+    "resumir_maiores_pagadores",
     "resolver_modelo_padrao",
     "criar_agente_transacao",
     "criar_agente_assistente",
