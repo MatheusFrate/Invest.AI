@@ -79,3 +79,34 @@ def test_conversao_para_engine_legado():
     assert engine_tx.valor_total == 280.0
     assert engine_tx.valor_unitario == 14.0
     assert engine_tx.data == "04/11/2026"
+
+
+def test_schema_com_campos_de_mercado_e_discrepancia():
+    alerta = "⚠️ Atenção: A cotação atual de MXRF11 na B3 é R$ 9,80. O preço informado de R$ 3,00 apresenta um desvio de 69%."
+    tx = TransactionSchema(
+        ticker="MXRF11",
+        quantidade=3,
+        valor_unitario=3.00,
+        cotacao_mercado=9.80,
+        alerta_discrepancia=alerta
+    )
+    assert tx.cotacao_mercado == 9.80
+    assert tx.alerta_discrepancia == alerta
+
+    # Garante que to_engine_transaction() funciona sem ser afetado pelos novos campos
+    engine_tx = tx.to_engine_transaction()
+    assert engine_tx.ticker == "MXRF11"
+    assert engine_tx.quantidade == 3.0
+    assert engine_tx.valor_unitario == 3.00
+    assert engine_tx.valor_total == 9.00
+
+
+def test_retrocompatibilidade_campos_opcionais_default_none():
+    tx = TransactionSchema(
+        ticker="PETR4",
+        quantidade=10,
+        valor_unitario=38.50
+    )
+    assert tx.cotacao_mercado is None
+    assert tx.alerta_discrepancia is None
+

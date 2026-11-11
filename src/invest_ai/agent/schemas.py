@@ -67,6 +67,14 @@ class TransactionSchema(BaseModel):
         default=None,
         description="Observações ou notas relevantes da negociação."
     )
+    cotacao_mercado: Optional[float] = Field(
+        default=None,
+        description="Cotação atual do ativo na B3 obtida como referência de mercado."
+    )
+    alerta_discrepancia: Optional[str] = Field(
+        default=None,
+        description="Mensagem de alerta caso o preço informado divirja significativamente da cotação de mercado."
+    )
 
     @field_validator("ticker")
     @classmethod

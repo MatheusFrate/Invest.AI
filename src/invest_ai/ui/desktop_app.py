@@ -239,7 +239,17 @@ class InvestAIApp(InvestApp):
 
     def _add_transaction_card(self, tx: TransactionSchema):
         """Adiciona card estruturado para confirmação de transação com Human-in-the-Loop."""
-        card = ctk.CTkFrame(self.chat_scroll, fg_color="#1f2937", border_color="#3b82f6", border_width=1, corner_radius=12)
+        has_alerta = bool(tx.alerta_discrepancia)
+        border_color = "#f59e0b" if has_alerta else "#3b82f6"
+        border_width = 2 if has_alerta else 1
+
+        card = ctk.CTkFrame(
+            self.chat_scroll,
+            fg_color="#1f2937",
+            border_color=border_color,
+            border_width=border_width,
+            corner_radius=12
+        )
         card.pack(fill="x", padx=10, pady=8)
 
         op_color = "#10b981" if tx.operacao.value == "compra" else "#ef4444"
@@ -258,6 +268,8 @@ class InvestAIApp(InvestApp):
             f"• Valor Total: R$ {tx.valor_total:.2f}\n"
             f"• Data: {tx.data}"
         )
+        if tx.cotacao_mercado is not None:
+            detalhes += f"\n• Cotação Ref. B3: R$ {tx.cotacao_mercado:.2f}"
         if tx.corretora:
             detalhes += f"  |  Corretora: {tx.corretora}"
 
@@ -268,6 +280,26 @@ class InvestAIApp(InvestApp):
             justify="left"
         )
         lbl_details.pack(anchor="w", padx=15, pady=(0, 10))
+
+        if has_alerta:
+            alerta_frame = ctk.CTkFrame(
+                card,
+                fg_color="#451a03",
+                border_color="#f59e0b",
+                border_width=1,
+                corner_radius=8
+            )
+            alerta_frame.pack(fill="x", padx=15, pady=(0, 12))
+
+            lbl_alerta = ctk.CTkLabel(
+                alerta_frame,
+                text=tx.alerta_discrepancia,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color="#fef3c7",
+                wraplength=480,
+                justify="left"
+            )
+            lbl_alerta.pack(anchor="w", padx=12, pady=10)
 
         btn_frame = ctk.CTkFrame(card, fg_color="transparent")
         btn_frame.pack(fill="x", padx=15, pady=(0, 12))

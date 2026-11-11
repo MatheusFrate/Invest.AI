@@ -41,6 +41,7 @@ dist/
 # ==========================================
 .vscode/
 .idea/
+.agents/
 .pytest_cache
 *.log
 Thumbs.db
