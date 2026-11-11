@@ -4,7 +4,26 @@ Verifica a aplicação de estilos e destaque visual de alerta de discrepância.
 """
 
 from unittest.mock import patch, MagicMock
-import customtkinter as ctk
+import pytest
+
+ctk = pytest.importorskip("customtkinter")
+
+# Valida se o ambiente possui servidor gráfico (display) disponível
+# No GitHub Actions (Ubuntu/Linux) sem X11/xvfb, testes de GUI devem ser pulados
+def _verificar_display_disponivel() -> bool:
+    try:
+        import tkinter
+        root = tkinter.Tk()
+        root.withdraw()
+        root.destroy()
+        return True
+    except Exception:
+        return False
+
+pytestmark = pytest.mark.skipif(
+    not _verificar_display_disponivel(),
+    reason="Ambiente headless sem display gráfico disponível (ex: CI Linux sem X11/xvfb)"
+)
 
 from invest_ai.agent.schemas import TransactionSchema
 from invest_ai.ui.desktop_app import InvestAIApp
