@@ -404,6 +404,21 @@ class InvestAIApp(InvestApp):
         )
         lbl_info.pack(anchor="w", pady=(4, 6))
 
+        if nota.total_custos_emolumentos > 0:
+            valor_fmt = f"{nota.total_custos_emolumentos:.2f}".replace(".", ",")
+            lbl_rateio = ctk.CTkLabel(
+                header_frame,
+                text=(
+                    f"Custos de R$ {valor_fmt} serão rateados proporcionalmente "
+                    f"(soma nas compras / deduz nas vendas conforme RFB)."
+                ),
+                font=ctk.CTkFont(size=11),
+                text_color="#fbbf24",
+                justify="left",
+                wraplength=520
+            )
+            lbl_rateio.pack(anchor="w", pady=(0, 6))
+
         # Tabela / Lista compacta com as operações encontradas
         ops_container = ctk.CTkFrame(card, fg_color="#0f172a", corner_radius=8)
         ops_container.pack(fill="x", padx=15, pady=(0, 10))
@@ -476,7 +491,8 @@ class InvestAIApp(InvestApp):
     def _confirm_and_save_brokerage_note(self, card_widget, nota: BrokerageNoteSchema):
         """Salva as transações da nota de corretagem no Excel sem duplicar e atualiza a carteira."""
         try:
-            engine_txs = [tx.to_engine_transaction() for tx in nota.transacoes]
+            transacoes_rateadas = nota.aplicar_rateio_custos()
+            engine_txs = [tx.to_engine_transaction() for tx in transacoes_rateadas]
             salvas, ignoradas = save_transactions_batch_to_excel(
                 engine_txs,
                 DEFAULT_EXCEL_PATH,
@@ -491,14 +507,14 @@ class InvestAIApp(InvestApp):
             if salvas == 0:
                 self._add_bot_message(
                     f"ℹ️ Nenhuma nova operação foi gravada:\n\n"
-                    f"Todas as {len(nota.transacoes)} operações desta nota (Pregão: {nota.data_pregao}) "
+                    f"Todas as {len(transacoes_rateadas)} operações desta nota (Pregão: {nota.data_pregao}) "
                     f"já constavam na planilha. A duplicação de dados foi evitada!"
                 )
                 return
 
             resumo_linhas = "\n".join(
                 f"• [{t.operacao.value.upper()}] {t.quantidade:g} {t.ticker} @ R$ {t.valor_unitario:.2f}"
-                for t in nota.transacoes
+                for t in transacoes_rateadas
             )
             msg_sucesso = (
                 f"OK! Nota de corretagem processada com sucesso!\n\n"

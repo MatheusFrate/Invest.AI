@@ -223,3 +223,56 @@ class BrokerageNoteSchema(BaseModel):
                 tx.data = self.data_pregao
         return self
 
+    def aplicar_rateio_custos(self) -> list[TransactionSchema]:
+        """
+        Rateia proporcionalmente `total_custos_emolumentos` entre as transações da nota
+        conforme regra da Receita Federal (soma nas compras, deduz nas vendas).
+        """
+        if self.total_custos_emolumentos <= 0 or not self.transacoes:
+            return [tx.model_copy() for tx in self.transacoes]
+
+        volume_total = sum(tx.valor_total or 0.0 for tx in self.transacoes)
+        if volume_total <= 0:
+            return [tx.model_copy() for tx in self.transacoes]
+
+        total_custos_centavos = round(self.total_custos_emolumentos * 100)
+        restante_centavos = total_custos_centavos
+        resultado: list[TransactionSchema] = []
+
+        for idx, tx in enumerate(self.transacoes):
+            valor_bruto = tx.valor_total or 0.0
+            if idx == len(self.transacoes) - 1:
+                taxa_centavos = restante_centavos
+            else:
+                peso = valor_bruto / volume_total
+                taxa_centavos = min(restante_centavos, round(total_custos_centavos * peso))
+                restante_centavos -= taxa_centavos
+
+            taxa_rateada = round(taxa_centavos / 100.0, 2)
+
+            if tx.operacao == TipoOperacao.COMPRA:
+                novo_valor_total = round(valor_bruto + taxa_rateada, 2)
+            else:
+                novo_valor_total = round(max(0.0, valor_bruto - taxa_rateada), 2)
+
+            novo_valor_unitario = round(novo_valor_total / tx.quantidade, 4)
+            nota_taxa = f"Taxa rateada: R$ {taxa_rateada:.2f}"
+            nova_obs = f"{tx.observacao} | {nota_taxa}" if tx.observacao else nota_taxa
+
+            resultado.append(
+                tx.model_copy(
+                    update={
+                        "valor_total": novo_valor_total,
+                        "valor_unitario": novo_valor_unitario,
+                        "observacao": nova_obs,
+                    }
+                )
+            )
+
+        return resultado
+
+    def to_engine_transactions_com_rateio(self) -> list[Transaction]:
+        """Converte as transações da nota para o motor já com o rateio de custos aplicado."""
+        return [tx.to_engine_transaction() for tx in self.aplicar_rateio_custos()]
+
+
