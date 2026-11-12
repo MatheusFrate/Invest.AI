@@ -94,7 +94,8 @@ def simular_impacto_darf(
     """
     Simula o resultado financeiro e o imposto de renda (DARF) devido caso o usuário venda
     determinada quantidade de um ativo por um preço específico.
-    Considera as regras de isenção de R$ 20k para ações e alíquota de 20% para FIIs.
+    Considera isenção de R$ 20k apenas para ações, alíquota de 20% para FIIs,
+    15% sem isenção para BDRs e ETFs, e compensação de prejuízos acumulados por classe.
     """
     clean_ticker = ticker.strip().upper()
     posicao = ctx.deps.obter_posicao_ticker(clean_ticker)
@@ -119,23 +120,55 @@ def simular_impacto_darf(
     custo_aquisicao = quantidade * pm
     lucro_prejuizo = valor_venda_total - custo_aquisicao
 
+    # Obtém o saldo de prejuízo acumulado da mesma classe de ativo
+    tipo_norm = "ação" if tipo_ativo in ("ação", "acao") else tipo_ativo
+    prejuizo_acumulado = 0.0
+    calc = ctx.deps.engine.calculate()
+    for rep in calc.get("tax_reports", []):
+        rep_tipo = "ação" if rep.tipo_ativo in ("ação", "acao") else rep.tipo_ativo
+        if rep_tipo == tipo_norm:
+            prejuizo_acumulado = rep.prejuizo_restante_acumulado
+
     isento = False
     aliquota = 0.0
     imposto_devido = 0.0
+    prejuizo_compensado = 0.0
     justificativa = ""
 
     if "fii" in tipo_ativo:
         aliquota = 0.20
         if lucro_prejuizo > 0:
-            imposto_devido = round(lucro_prejuizo * aliquota, 2)
+            prejuizo_compensado = min(lucro_prejuizo, prejuizo_acumulado)
+            base_calculo = lucro_prejuizo - prejuizo_compensado
+            imposto_devido = round(base_calculo * aliquota, 2)
             justificativa = (
                 f"Para Fundos Imobiliários (FIIs), não há faixa de isenção de R$ 20.000. "
-                f"A alíquota é de 20% sobre o lucro líquido apurado (R$ {lucro_prejuizo:.2f})."
+                f"A alíquota é de 20% sobre a base tributável (R$ {base_calculo:.2f})."
             )
+            if prejuizo_compensado > 0:
+                justificativa += f" Prejuízo acumulado compensado: R$ {prejuizo_compensado:.2f}."
         else:
             justificativa = (
                 f"Venda de FII com prejuízo de R$ {abs(lucro_prejuizo):.2f}. "
                 f"Sem imposto devido. O prejuízo poderá ser compensado em lucros futuros de FII."
+            )
+    elif tipo_norm in ("bdr", "etf"):
+        aliquota = 0.15
+        nome_classe = "BDRs" if tipo_norm == "bdr" else "ETFs"
+        if lucro_prejuizo > 0:
+            prejuizo_compensado = min(lucro_prejuizo, prejuizo_acumulado)
+            base_calculo = lucro_prejuizo - prejuizo_compensado
+            imposto_devido = round(base_calculo * aliquota, 2)
+            justificativa = (
+                f"Para {nome_classe}, não há faixa de isenção de R$ 20.000. "
+                f"A alíquota é de 15% sobre a base tributável (R$ {base_calculo:.2f})."
+            )
+            if prejuizo_compensado > 0:
+                justificativa += f" Prejuízo acumulado compensado: R$ {prejuizo_compensado:.2f}."
+        else:
+            justificativa = (
+                f"Venda de {nome_classe} com prejuízo de R$ {abs(lucro_prejuizo):.2f}. "
+                f"Sem imposto devido. O prejuízo poderá ser compensado em lucros futuros de {nome_classe}."
             )
     else:
         if valor_venda_total <= 20000.0:
@@ -155,11 +188,15 @@ def simular_impacto_darf(
             isento = False
             aliquota = 0.15
             if lucro_prejuizo > 0:
-                imposto_devido = round(lucro_prejuizo * aliquota, 2)
+                prejuizo_compensado = min(lucro_prejuizo, prejuizo_acumulado)
+                base_calculo = lucro_prejuizo - prejuizo_compensado
+                imposto_devido = round(base_calculo * aliquota, 2)
                 justificativa = (
                     f"Volume de vendas no mês superior a R$ 20.000,00 (R$ {valor_venda_total:.2f}). "
-                    f"Aplica-se alíquota de 15% sobre o lucro (R$ {lucro_prejuizo:.2f})."
+                    f"Aplica-se alíquota de 15% sobre a base tributável (R$ {base_calculo:.2f})."
                 )
+                if prejuizo_compensado > 0:
+                    justificativa += f" Prejuízo acumulado compensado: R$ {prejuizo_compensado:.2f}."
             else:
                 justificativa = (
                     f"Venda com prejuízo de R$ {abs(lucro_prejuizo):.2f}. Sem imposto devido."
@@ -175,6 +212,7 @@ def simular_impacto_darf(
         "preco_medio_aquisicao": round(pm, 2),
         "custo_total_aquisicao": round(custo_aquisicao, 2),
         "lucro_prejuizo_total": round(lucro_prejuizo, 2),
+        "prejuizo_compensado": round(prejuizo_compensado, 2),
         "aliquota_ir_pct": round(aliquota * 100, 1),
         "imposto_devido": imposto_devido,
         "isento": isento,
@@ -545,6 +583,12 @@ def gerar_guia_irpf(ctx: RunContext[InvestContext], ano: Optional[int] = None) -
                     f"Resultado {_formatar_moeda(m['resultado_etfs'])} | "
                     f"DARF {_formatar_moeda(m['darf_etfs'])}"
                 )
+            if m.get("vendas_bdrs", 0) > 0 or m.get("resultado_bdrs", 0) != 0:
+                partes.append(
+                    f"BDRs Vendas {_formatar_moeda(m['vendas_bdrs'])} | "
+                    f"Resultado {_formatar_moeda(m['resultado_bdrs'])} | "
+                    f"DARF {_formatar_moeda(m['darf_bdrs'])}"
+                )
             linhas.append(" ".join(partes))
 
     prej = rv.get("prejuizo_acumulado_final", {})
@@ -555,5 +599,7 @@ def gerar_guia_irpf(ctx: RunContext[InvestContext], ano: Optional[int] = None) -
     ])
     if prej.get("etf", 0.0) > 0:
         linhas.append(f"  - ETFs: {_formatar_moeda(prej.get('etf', 0.0))}")
+    if prej.get("bdr", 0.0) > 0:
+        linhas.append(f"  - BDRs: {_formatar_moeda(prej.get('bdr', 0.0))}")
 
     return "\n".join(linhas)

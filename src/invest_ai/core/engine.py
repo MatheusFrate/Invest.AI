@@ -181,9 +181,10 @@ class InvestmentEngine:
         prejuizo_acumulado_fii = 0.0
         prejuizo_acumulado_acao = 0.0
         prejuizo_acumulado_etf = 0.0
+        prejuizo_acumulado_bdr = 0.0
 
         for mes in meses_unicos:
-            for tipo in ['fii', 'ação', 'etf']:
+            for tipo in ['fii', 'ação', 'etf', 'bdr']:
                 subset = df_sales[(df_sales['mes_ano'] == mes) & (df_sales['tipo_ativo'] == tipo)]
                 if subset.empty:
                     continue
@@ -204,8 +205,11 @@ class InvestmentEngine:
                 elif tipo == 'ação':
                     prejuizo_acum = prejuizo_acumulado_acao
                     aliquota = 0.15
-                else:  # etf
+                elif tipo == 'etf':
                     prejuizo_acum = prejuizo_acumulado_etf
+                    aliquota = 0.15
+                else:  # bdr
+                    prejuizo_acum = prejuizo_acumulado_bdr
                     aliquota = 0.15
 
                 rep.aliquota = aliquota
@@ -246,8 +250,10 @@ class InvestmentEngine:
                     prejuizo_acumulado_fii = prejuizo_acum
                 elif tipo == 'ação':
                     prejuizo_acumulado_acao = prejuizo_acum
-                else:
+                elif tipo == 'etf':
                     prejuizo_acumulado_etf = prejuizo_acum
+                else:
+                    prejuizo_acumulado_bdr = prejuizo_acum
 
                 reports.append(rep)
 
@@ -414,7 +420,7 @@ class InvestmentEngine:
 
         # Apuração de Renda Variável acumulada até 31/12/{ano}
         tax_reports = self._calculate_taxes(sales_ate_ano)
-        prejuizo_final = {"acao": 0.0, "fii": 0.0, "etf": 0.0}
+        prejuizo_final = {"acao": 0.0, "fii": 0.0, "etf": 0.0, "bdr": 0.0}
         meses_ano: Dict[str, Dict] = {}
         sufixo_ano = f"/{ano}"
 
@@ -425,6 +431,8 @@ class InvestmentEngine:
                 prejuizo_final["fii"] = round(rep.prejuizo_restante_acumulado, 2)
             elif rep.tipo_ativo == "etf":
                 prejuizo_final["etf"] = round(rep.prejuizo_restante_acumulado, 2)
+            elif rep.tipo_ativo == "bdr":
+                prejuizo_final["bdr"] = round(rep.prejuizo_restante_acumulado, 2)
 
             if not rep.mes_ano.endswith(sufixo_ano):
                 continue
@@ -442,6 +450,9 @@ class InvestmentEngine:
                     "vendas_etfs": 0.0,
                     "resultado_etfs": 0.0,
                     "darf_etfs": 0.0,
+                    "vendas_bdrs": 0.0,
+                    "resultado_bdrs": 0.0,
+                    "darf_bdrs": 0.0,
                     "darf_total": 0.0,
                 }
 
@@ -460,9 +471,13 @@ class InvestmentEngine:
                 entry["vendas_etfs"] = round(rep.vendas_total, 2)
                 entry["resultado_etfs"] = round(rep.resultado_liquido, 2)
                 entry["darf_etfs"] = round(rep.imposto_devido, 2)
+            elif rep.tipo_ativo == "bdr":
+                entry["vendas_bdrs"] = round(rep.vendas_total, 2)
+                entry["resultado_bdrs"] = round(rep.resultado_liquido, 2)
+                entry["darf_bdrs"] = round(rep.imposto_devido, 2)
 
             entry["darf_total"] = round(
-                entry["darf_acoes"] + entry["darf_fiis"] + entry["darf_etfs"], 2
+                entry["darf_acoes"] + entry["darf_fiis"] + entry["darf_etfs"] + entry["darf_bdrs"], 2
             )
 
         return {
