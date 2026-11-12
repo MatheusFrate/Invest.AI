@@ -133,20 +133,26 @@ class InvestAIApp(InvestApp):
         chips_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
 
         sugestoes = [
-            "Comprei 100 MXRF11 a 9,45",
-            "Se eu vender 20 PETR4 pago DARF?",
-            "Qual o meu preço médio de MXRF11?",
-            "Quais ações eu tenho na carteira?"
+            ("Comprei 100 MXRF11 a 9,45", "Comprei 100 MXRF11 a 9,45", False),
+            ("Se eu vender 20 PETR4 pago DARF?", "Se eu vender 20 PETR4 pago DARF?", False),
+            ("Qual o meu preço médio de MXRF11?", "Qual o meu preço médio de MXRF11?", False),
+            ("Quais ações eu tenho na carteira?", "Quais ações eu tenho na carteira?", False),
+            ("📋 Guia IRPF (Ano Anterior)", "Como devo declarar meus ativos no IRPF do ano passado?", True),
         ]
-        for sug in sugestoes:
+        for label, prompt_text, auto_send in sugestoes:
+            cmd = (
+                (lambda p=prompt_text: self._enviar_sugestao_rapida(p))
+                if auto_send
+                else (lambda p=prompt_text: self._set_input_text(p))
+            )
             btn_chip = ctk.CTkButton(
                 chips_frame,
-                text=sug,
+                text=label,
                 height=26,
                 font=ctk.CTkFont(size=11),
                 fg_color="#27272a",
                 hover_color="#3f3f46",
-                command=lambda s=sug: self._set_input_text(s)
+                command=cmd,
             )
             btn_chip.pack(side="left", padx=(0, 8))
 
@@ -181,6 +187,11 @@ class InvestAIApp(InvestApp):
         self.entry_ai_prompt.delete(0, tk.END)
         self.entry_ai_prompt.insert(0, text)
         self.entry_ai_prompt.focus()
+
+    def _enviar_sugestao_rapida(self, text: str):
+        """Preenche o campo de entrada e envia automaticamente a pergunta."""
+        self._set_input_text(text)
+        self._on_send_prompt()
 
     def _add_user_message(self, text: str):
         """Adiciona bolha de mensagem do usuário."""

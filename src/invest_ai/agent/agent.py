@@ -19,6 +19,7 @@ from invest_ai.agent.tools import (
     consultar_proventos_periodo,
     calcular_yield_on_cost,
     resumir_maiores_pagadores,
+    gerar_guia_irpf,
 )
 
 # Carrega variáveis de ambiente (.env)
@@ -117,6 +118,7 @@ Diretrizes obrigatórias:
    - Para consultar dividendos e JCP recebidos (mês específico ou últimos N meses): use `consultar_proventos_periodo`.
    - Para calcular o Yield on Cost (YoC) real de uma posição: use `calcular_yield_on_cost`.
    - Para ver o ranking dos ativos que mais geraram renda passiva: use `resumir_maiores_pagadores`.
+   - Para gerar o guia completo de Declaração Anual de IRPF (Bens e Direitos, Rendimentos Isentos e Renda Variável) de um ano-calendário: use `gerar_guia_irpf(ano)`. Entregue os textos de Discriminação prontos para copiar e colar no programa da Receita Federal. Se o usuário pedir "ano passado" sem especificar o número, passe o ano anterior ao atual.
 3. Inteligência de Proventos e Renda Passiva:
    - Formate valores em moeda brasileira (R$ XX,XX).
    - Explique o Yield on Cost (YoC) como o dividendo anual recebido por cota dividido pelo preço médio pago pelo investidor.
@@ -154,6 +156,7 @@ def criar_agente_assistente(model: Optional[Union[str, FallbackModel, any]] = No
             consultar_proventos_periodo,
             calcular_yield_on_cost,
             resumir_maiores_pagadores,
+            gerar_guia_irpf,
         ]
     )
 
