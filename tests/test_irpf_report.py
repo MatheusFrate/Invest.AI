@@ -13,6 +13,10 @@ from invest_ai.agent.deps import InvestContext
 from invest_ai.agent.tools import gerar_guia_irpf
 from invest_ai.agent.agent import criar_agente_assistente
 from invest_ai.core.engine import InvestmentEngine, Transaction
+from invest_ai.services.irpf_exporter import (
+    exportar_guia_irpf_txt,
+    gerar_conteudo_guia_irpf_texto,
+)
 
 
 def test_snapshot_anual_irpf_posicoes_e_zeramento():
@@ -213,3 +217,79 @@ def test_assistant_agent_irpf_com_test_model():
         t.name == "gerar_guia_irpf"
         for t in test_model.last_model_request_parameters.function_tools
     )
+
+
+def test_gerar_conteudo_guia_irpf_texto_completo():
+    """Valida cabeçalho com data de geração e todas as seções via irpf_exporter."""
+    ctx = InvestContext(excel_path="nao_existe.xlsx")
+    ctx.engine.set_transactions([
+        Transaction(data="2024-05-10", ticker="MXRF11", tipo_ativo="fii", operacao="compra", quantidade=100, valor_unitario=10.0),
+        Transaction(data="2025-03-01", ticker="PETR4", tipo_ativo="ação", operacao="compra", quantidade=100, valor_unitario=30.0),
+        Transaction(data="2025-09-10", ticker="PETR4", tipo_ativo="ação", operacao="venda", quantidade=100, valor_unitario=35.0),
+    ])
+    ctx._carteira_carregada = True
+    ctx.definir_dados_proventos({
+        "MXRF11": [
+            {"data": "15/06/2025", "mes_ano": "06/2025", "amount": 0.12, "timestamp": int(datetime(2025, 6, 15).timestamp()), "dt": datetime(2025, 6, 15)},
+        ],
+        "PETR4": [
+            {"data": "20/07/2025", "mes_ano": "07/2025", "amount": 1.50, "timestamp": int(datetime(2025, 7, 20).timestamp()), "dt": datetime(2025, 7, 20)},
+        ],
+    })
+
+    conteudo = gerar_conteudo_guia_irpf_texto(ctx, 2025)
+
+    assert "GUIA DE DECLARAÇÃO ANUAL DE IRPF — ANO-CALENDÁRIO 2025" in conteudo
+    assert "Gerado em:" in conteudo
+    assert "1. FICHA BENS E DIREITOS" in conteudo
+    assert "Situação em 31/12/2024: R$ 1.000,00" in conteudo
+    assert "Situação em 31/12/2025: R$ 1.000,00" in conteudo
+    assert "Discriminação: 100 cotas do Fundo Imobiliário MXRF11" in conteudo
+    assert "2. FICHA RENDIMENTOS ISENTOS E NÃO TRIBUTÁVEIS (2025)" in conteudo
+    assert "Dividendos de Ações" in conteudo
+    assert "PETR4: R$ 150,00" in conteudo
+    assert "Rendimentos de FIIs" in conteudo
+    assert "MXRF11: R$ 12,00" in conteudo
+    assert "3. ABA RENDA VARIÁVEL (2025)" in conteudo
+    assert "09/2025:" in conteudo
+    assert "ISENTO" in conteudo
+    assert "Saldo de Prejuízo Acumulado a Compensar em 31/12/2025 (transportar para 2026):" in conteudo
+
+
+def test_exportar_guia_irpf_txt_grava_utf8(tmp_path):
+    """Valida a gravação em arquivo .txt UTF-8 e o retorno do caminho salvo."""
+    ctx = InvestContext(excel_path="nao_existe.xlsx")
+    ctx.engine.set_transactions([
+        Transaction(data="2025-01-15", ticker="ITSA4", tipo_ativo="ação", operacao="compra", quantidade=200, valor_unitario=10.0),
+    ])
+    ctx._carteira_carregada = True
+    ctx.definir_dados_proventos({})
+
+    destino = tmp_path / "export" / "guia_irpf_2025.txt"
+    salvo = exportar_guia_irpf_txt(ctx, 2025, str(destino))
+
+    assert salvo == str(destino)
+    assert destino.exists()
+
+    texto_lido = destino.read_text(encoding="utf-8")
+    assert "GUIA DE DECLARAÇÃO ANUAL DE IRPF — ANO-CALENDÁRIO 2025" in texto_lido
+    assert "200 ações de ITSA4" in texto_lido
+    assert "03 - Participações Societárias" in texto_lido
+
+
+def test_exportar_guia_irpf_txt_offline_sem_proventos(tmp_path):
+    """Garante que exportar_guia_irpf_txt trata falha de proventos offline graciosamente."""
+    ctx = InvestContext(excel_path="nao_existe.xlsx")
+    ctx.engine.set_transactions([
+        Transaction(data="2025-02-10", ticker="HGLG11", tipo_ativo="fii", operacao="compra", quantidade=10, valor_unitario=160.0),
+    ])
+    ctx._carteira_carregada = True
+    ctx.obter_proventos_historicos = MagicMock(side_effect=ConnectionError("Offline"))
+
+    destino = tmp_path / "guia_offline.txt"
+    salvo = exportar_guia_irpf_txt(ctx, 2025, str(destino))
+
+    assert salvo == str(destino)
+    texto_lido = destino.read_text(encoding="utf-8")
+    assert "HGLG11" in texto_lido
+    assert "Nenhum provento registrado ou disponível para 2025" in texto_lido
