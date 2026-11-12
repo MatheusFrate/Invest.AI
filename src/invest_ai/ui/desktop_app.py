@@ -8,8 +8,9 @@ import os
 import re
 import time
 import threading
+from datetime import datetime
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import messagebox, filedialog, simpledialog
 import customtkinter as ctk
 
 from invest_ai.ui.base_window import InvestApp
@@ -34,6 +35,7 @@ from invest_ai.services.excel_handler import (
     normalizar_todas_datas_planilha
 )
 from invest_ai.services.pdf_extractor import extrair_texto_pdf
+from invest_ai.services.irpf_exporter import exportar_guia_irpf_txt
 
 
 class InvestAIApp(InvestApp):
@@ -117,6 +119,17 @@ class InvestAIApp(InvestApp):
         )
         subtitle_lbl.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
+        self.btn_export_irpf = ctk.CTkButton(
+            header_frame,
+            text="💾 Exportar Guia IRPF (.txt)",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#059669",
+            hover_color="#047857",
+            height=38,
+            command=self._on_export_irpf_txt
+        )
+        self.btn_export_irpf.grid(row=0, column=1, rowspan=2, padx=(10, 0), sticky="e")
+
         self.btn_import_pdf = ctk.CTkButton(
             header_frame,
             text="📄 Importar Nota de Corretagem (PDF)",
@@ -126,7 +139,7 @@ class InvestAIApp(InvestApp):
             height=38,
             command=self._on_import_brokerage_note
         )
-        self.btn_import_pdf.grid(row=0, column=1, rowspan=2, padx=(10, 0), sticky="e")
+        self.btn_import_pdf.grid(row=0, column=2, rowspan=2, padx=(10, 0), sticky="e")
 
         self.chat_scroll = ctk.CTkScrollableFrame(frame, corner_radius=10, fg_color="#18181b")
         self.chat_scroll.grid(row=1, column=0, sticky="nsew", pady=(0, 15))
@@ -240,13 +253,33 @@ class InvestAIApp(InvestApp):
         card = ctk.CTkFrame(self.chat_scroll, fg_color="#1e1e24", corner_radius=10)
         card.pack(fill="x", padx=10, pady=6, anchor="w")
 
+        top_row = ctk.CTkFrame(card, fg_color="transparent")
+        top_row.pack(fill="x", padx=12, pady=(8, 2))
+
         lbl_bot = ctk.CTkLabel(
-            card,
+            top_row,
             text="🤖 Invest.AI",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#34d399"
         )
-        lbl_bot.pack(anchor="w", padx=12, pady=(8, 2))
+        lbl_bot.pack(side="left")
+
+        if len(texto_limpo) > 300:
+            btn_copy = ctk.CTkButton(
+                top_row,
+                text="📋 Copiar texto",
+                font=ctk.CTkFont(size=11),
+                fg_color="#27272a",
+                hover_color="#3f3f46",
+                text_color="#d4d4d8",
+                height=24,
+                width=110,
+                corner_radius=6,
+            )
+            btn_copy.configure(
+                command=lambda t=texto_limpo, b=btn_copy: self._copy_to_clipboard(t, b)
+            )
+            btn_copy.pack(side="right")
 
         lbl_msg = ctk.CTkLabel(
             card,
@@ -258,6 +291,16 @@ class InvestAIApp(InvestApp):
         lbl_msg.pack(anchor="w", padx=12, pady=(0, 8))
 
         self.chat_scroll.after(100, lambda: self.chat_scroll._parent_canvas.yview_moveto(1.0))
+
+    def _copy_to_clipboard(self, texto: str, button: ctk.CTkButton):
+        """Copia o texto da bolha para a área de transferência e exibe feedback breve."""
+        self.clipboard_clear()
+        self.clipboard_append(texto)
+        button.configure(text="✓ Copiado!")
+        self.after(
+            2000,
+            lambda: button.configure(text="📋 Copiar texto") if button.winfo_exists() else None,
+        )
 
     def _add_transaction_card(self, tx: TransactionSchema):
         """Adiciona card estruturado para confirmação de transação com Human-in-the-Loop."""
@@ -795,6 +838,65 @@ class InvestAIApp(InvestApp):
                     text="📄 Importar Nota de Corretagem (PDF)"
                 )
             )
+
+    def _on_export_irpf_txt(self):
+        """Solicita o ano-calendário e o destino do arquivo .txt para exportar o Guia IRPF."""
+        ano = simpledialog.askinteger(
+            "Exportar Guia IRPF (.txt)",
+            "Informe o ano-calendário da declaração:",
+            initialvalue=datetime.now().year - 1,
+            minvalue=2015,
+            maxvalue=2035,
+            parent=self,
+        )
+        if ano is None:
+            return
+
+        caminho_arquivo = filedialog.asksaveasfilename(
+            title=f"Salvar Guia IRPF {ano}",
+            defaultextension=".txt",
+            initialfile=f"guia_irpf_{ano}.txt",
+            filetypes=[("Arquivos de Texto (*.txt)", "*.txt"), ("Todos os arquivos", "*.*")],
+        )
+        if not caminho_arquivo:
+            return
+
+        self.btn_export_irpf.configure(state="disabled", text="Exportando...")
+        threading.Thread(
+            target=self._export_irpf_thread,
+            args=(ano, caminho_arquivo),
+            daemon=True,
+        ).start()
+
+    def _export_irpf_thread(self, ano: int, caminho_arquivo: str):
+        """Thread em background para gerar e gravar o Guia IRPF em arquivo texto UTF-8."""
+        try:
+            salvo_em = exportar_guia_irpf_txt(self.ai_context, ano, caminho_arquivo)
+            self.after(
+                0,
+                lambda: self._on_export_irpf_success(ano, salvo_em),
+            )
+        except Exception as e:
+            err_msg = f"❌ Erro ao exportar Guia IRPF {ano}:\n{e}"
+            self.after(0, lambda: self._on_export_irpf_error(err_msg))
+        finally:
+            self.after(
+                0,
+                lambda: self.btn_export_irpf.configure(
+                    state="normal",
+                    text="💾 Exportar Guia IRPF (.txt)",
+                ),
+            )
+
+    def _on_export_irpf_success(self, ano: int, salvo_em: str):
+        """Notifica no chat e via diálogo após exportar o Guia IRPF."""
+        self._add_bot_message(f"✅ Guia IRPF {ano} exportado com sucesso para:\n{salvo_em}")
+        messagebox.showinfo("Guia IRPF Exportado", f"Arquivo salvo com sucesso em:\n{salvo_em}")
+
+    def _on_export_irpf_error(self, err_msg: str):
+        """Notifica erro no chat e via diálogo caso a exportação falhe."""
+        self._add_bot_message(err_msg)
+        messagebox.showerror("Erro na Exportação", err_msg)
 
 
 if __name__ == "__main__":
