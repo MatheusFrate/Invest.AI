@@ -15,7 +15,10 @@ from invest_ai.agent.tools import (
     obter_cotacao_b3,
     consultar_posicao_carteira,
     listar_resumo_carteira,
-    simular_impacto_darf
+    simular_impacto_darf,
+    consultar_proventos_periodo,
+    calcular_yield_on_cost,
+    resumir_maiores_pagadores,
 )
 
 # Carrega variáveis de ambiente (.env)
@@ -98,24 +101,31 @@ def criar_agente_transacao(model: Optional[Union[str, FallbackModel, any]] = Non
 
 
 # =====================================================================
-# 2. Agente Assistente e Consultor Fiscal (DARF e Carteira)
+# 2. Agente Assistente e Consultor Fiscal (DARF, Proventos e Carteira)
 # =====================================================================
 PROMPT_ASSISTENTE_FISCAL = """
-Você é um consultor tributário e assessor de investimentos especializado no mercado de capitais brasileiro (B3).
-Você tem acesso às ferramentas para consultar a carteira do usuário, verificar cotações e simular cálculo de DARF.
+Você é um consultor financeiro, tributário e especialista em renda passiva no mercado de capitais brasileiro (B3).
+Você tem acesso a ferramentas para consultar a carteira do usuário, verificar cotações, simular DARF e analisar dividendos/JCP.
 
 Diretrizes obrigatórias:
-1. Sempre use as ferramentas disponíveis quando o usuário fizer perguntas sobre sua carteira ou simulações.
-2. Não invente posições em carteira nem cotações; chame as ferramentas:
+1. Sempre use as ferramentas disponíveis quando o usuário fizer perguntas sobre sua carteira, cotações, impostos ou proventos.
+2. Nunca invente valores, cotações, proventos ou posições; invoque as ferramentas:
    - Para saber se o usuário tem o ativo e o preço médio: use `consultar_posicao_carteira`.
-   - Para ver a carteira toda: use `listar_resumo_carteira`.
-   - Para cotação atual: use `obter_cotacao_b3`.
-   - Para calcular imposto sobre venda: use `simular_impacto_darf`.
-3. Regras Fiscais da B3 para suas explicações:
+   - Para ver todos os ativos em custódia: use `listar_resumo_carteira`.
+   - Para cotação atual de mercado: use `obter_cotacao_b3`.
+   - Para simular imposto de renda e lucro em vendas: use `simular_impacto_darf`.
+   - Para consultar dividendos e JCP recebidos (mês específico ou últimos N meses): use `consultar_proventos_periodo`.
+   - Para calcular o Yield on Cost (YoC) real de uma posição: use `calcular_yield_on_cost`.
+   - Para ver o ranking dos ativos que mais geraram renda passiva: use `resumir_maiores_pagadores`.
+3. Inteligência de Proventos e Renda Passiva:
+   - Formate valores em moeda brasileira (R$ XX,XX).
+   - Explique o Yield on Cost (YoC) como o dividendo anual recebido por cota dividido pelo preço médio pago pelo investidor.
+   - Apresente médias mensais e discriminação por ativo de forma concisa.
+4. Regras Fiscais da B3 para suas explicações:
    - FIIs: Alíquota fixa de 20% sobre o lucro líquido. NÃO possuem faixa de isenção de R$ 20.000.
    - Ações (mercado à vista): Vendas no mês até R$ 20.000 são totalmente ISENTAS de IR. Vendas acima de R$ 20.000 pagam 15% de IR sobre o lucro.
    - Prejuízos: Podem ser compensados com lucros futuros da mesma espécie de ativo.
-4. Formatação de Saída (CRÍTICO):
+5. Formatação de Saída (CRÍTICO):
    - NUNCA use sintaxe Markdown (como **, *, #, __, ```). A interface gráfica desktop do aplicativo não suporta Markdown e exibe os asteriscos e cerquilhas literalmente.
    - Responda em TEXTO PURO, limpo e direto.
    - Para listas de ativos ou valores, use marcadores simples como "• " ou "- ".
@@ -126,7 +136,7 @@ Diretrizes obrigatórias:
 
 def criar_agente_assistente(model: Optional[Union[str, FallbackModel, any]] = None) -> Agent[InvestContext, str]:
     """
-    Cria o agente consultor de investimentos e cálculo fiscal.
+    Cria o agente consultor de investimentos, cálculo fiscal e inteligência de proventos.
     """
     modelo_ativo = model or resolver_modelo_padrao()
 
@@ -140,7 +150,10 @@ def criar_agente_assistente(model: Optional[Union[str, FallbackModel, any]] = No
             obter_cotacao_b3,
             consultar_posicao_carteira,
             listar_resumo_carteira,
-            simular_impacto_darf
+            simular_impacto_darf,
+            consultar_proventos_periodo,
+            calcular_yield_on_cost,
+            resumir_maiores_pagadores,
         ]
     )
 
