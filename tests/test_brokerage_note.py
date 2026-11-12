@@ -291,6 +291,27 @@ def test_is_duplicate_transaction():
     )
     assert is_duplicate_transaction(nova_venda, lista_existentes) is False
 
+    # Diferença real de R$ 0,01 não deve ser tratada como duplicata
+    venda_6681 = Transaction(
+        ticker="IRIM11",
+        operacao="venda",
+        tipo_ativo="fii",
+        quantidade=1.0,
+        valor_unitario=66.81,
+        valor_total=66.81,
+        data="19/10/2026"
+    )
+    venda_6682 = Transaction(
+        ticker="IRIM11",
+        operacao="venda",
+        tipo_ativo="fii",
+        quantidade=1.0,
+        valor_unitario=66.82,
+        valor_total=66.82,
+        data="19/10/2026"
+    )
+    assert is_duplicate_transaction(venda_6682, [venda_6681]) is False
+
 
 def test_prevencao_duplicidade_ao_salvar_excel(tmp_path):
     """Testa bloqueio de duplicatas ao gravar na planilha individualmente."""
@@ -369,6 +390,79 @@ def test_salvar_lote_com_prevencao_duplicidade(tmp_path):
     # Todas devem ter datas DD/MM/AAAA
     for t in todas:
         assert "/" in t.data
+
+
+def test_salvar_lote_vendas_parciais_diferenca_um_centavo(tmp_path):
+    """Vendas parciais no mesmo dia e quantidade com R$ 0,01 de diferença devem ser todas salvas."""
+    caminho = tmp_path / "planilha_centavo.xlsx"
+    lote = [
+        Transaction(
+            ticker="IRIM11",
+            operacao="venda",
+            tipo_ativo="fii",
+            quantidade=1.0,
+            valor_unitario=66.81,
+            valor_total=66.81,
+            data="19/10/2026",
+        ),
+        Transaction(
+            ticker="IRIM11",
+            operacao="venda",
+            tipo_ativo="fii",
+            quantidade=1.0,
+            valor_unitario=66.82,
+            valor_total=66.82,
+            data="19/10/2026",
+        ),
+    ]
+
+    salvas, duplicadas = save_transactions_batch_to_excel(lote, str(caminho), prevent_duplicates=True)
+    assert salvas == 2
+    assert duplicadas == 0
+
+    todas = load_transactions_from_excel(str(caminho))
+    assert len(todas) == 2
+
+
+def test_salvar_lote_execucoes_parciais_identicas_e_reimportacao(tmp_path):
+    """
+    Duas execuções parciais idênticas na mesma nota devem ser salvas na 1ª importação,
+    mas bloqueadas 1-para-1 se o mesmo lote for reimportado.
+    """
+    caminho = tmp_path / "planilha_parciais_identicas.xlsx"
+    lote = [
+        Transaction(
+            ticker="IRIM11",
+            operacao="venda",
+            tipo_ativo="fii",
+            quantidade=1.0,
+            valor_unitario=66.81,
+            valor_total=66.81,
+            data="19/10/2026",
+        ),
+        Transaction(
+            ticker="IRIM11",
+            operacao="venda",
+            tipo_ativo="fii",
+            quantidade=1.0,
+            valor_unitario=66.81,
+            valor_total=66.81,
+            data="19/10/2026",
+        ),
+    ]
+
+    # 1ª importação: ambas as execuções parciais são salvas
+    salvas1, duplicadas1 = save_transactions_batch_to_excel(lote, str(caminho), prevent_duplicates=True)
+    assert salvas1 == 2
+    assert duplicadas1 == 0
+
+    # 2ª importação do mesmo lote: ambas dão match 1-para-1 e são bloqueadas
+    salvas2, duplicadas2 = save_transactions_batch_to_excel(lote, str(caminho), prevent_duplicates=True)
+    assert salvas2 == 0
+    assert duplicadas2 == 2
+
+    todas = load_transactions_from_excel(str(caminho))
+    assert len(todas) == 2
 
 
 def test_normalizar_todas_datas_planilha(tmp_path):
