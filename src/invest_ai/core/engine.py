@@ -15,8 +15,8 @@ class Transaction:
     id: Optional[int] = None
     data: str = ""  # YYYY-MM-DD ou DD/MM/YYYY
     ticker: str = ""
-    tipo_ativo: str = "fii"  # 'fii', 'ação', 'etf'
-    operacao: str = "compra"  # 'compra' ou 'venda'
+    tipo_ativo: str = "fii"  # 'fii', 'ação', 'etf', 'bdr'
+    operacao: str = "compra"  # 'compra', 'venda', 'desdobramento', 'agrupamento', 'conversao'
     quantidade: float = 0.0
     valor_total: float = 0.0
     valor_unitario: float = 0.0
@@ -67,6 +67,58 @@ class InvestmentEngine:
     def set_transactions(self, txs: List[Transaction]):
         self.transactions = txs
 
+    @staticmethod
+    def _apply_corporate_event(wallet: Dict[str, Dict], tx: Transaction) -> None:
+        """
+        Aplica eventos corporativos (desdobramento, agrupamento, conversao) no estado da carteira
+        preservando integralmente o custo total de aquisição e sem gerar alienação/DARF.
+        """
+        if tx.operacao in ("desdobramento", "agrupamento"):
+            fator = tx.quantidade
+            if fator <= 0:
+                return
+            item = wallet.get(tx.ticker)
+            if item and item["quantidade"] > 0:
+                item["quantidade"] *= fator
+                item["preco_medio"] = (
+                    item["custo_total"] / item["quantidade"]
+                    if item["quantidade"] > 0
+                    else 0.0
+                )
+        elif tx.operacao == "conversao":
+            if "->" not in tx.ticker:
+                return
+            origem, destino = [part.strip().upper() for part in tx.ticker.split("->", 1)]
+            if not origem or not destino:
+                return
+            fator = tx.quantidade if tx.quantidade > 0 else 1.0
+            orig_item = wallet.get(origem)
+            if not orig_item or orig_item["quantidade"] <= 0:
+                return
+
+            qtd_origem = orig_item["quantidade"]
+            custo_origem = orig_item["custo_total"]
+            tipo_origem = orig_item.get("tipo_ativo") or tx.tipo_ativo
+
+            orig_item["quantidade"] = 0.0
+            orig_item["custo_total"] = 0.0
+            orig_item["preco_medio"] = 0.0
+
+            if destino not in wallet:
+                wallet[destino] = {
+                    "quantidade": 0.0,
+                    "custo_total": 0.0,
+                    "preco_medio": 0.0,
+                    "tipo_ativo": tx.tipo_ativo or tipo_origem,
+                }
+
+            dest_item = wallet[destino]
+            dest_item["quantidade"] += qtd_origem * fator
+            dest_item["custo_total"] += custo_origem
+            if dest_item["quantidade"] > 0:
+                dest_item["preco_medio"] = dest_item["custo_total"] / dest_item["quantidade"]
+            dest_item["tipo_ativo"] = tx.tipo_ativo or tipo_origem
+
     def calculate(self):
         """
         Calcula a carteira atual (preço médio e quantidade),
@@ -78,6 +130,10 @@ class InvestmentEngine:
         sales: List[SaleResult] = []
 
         for idx, tx in enumerate(self.transactions):
+            if tx.operacao in ("desdobramento", "agrupamento", "conversao"):
+                self._apply_corporate_event(wallet, tx)
+                continue
+
             ticker = tx.ticker
             if ticker not in wallet:
                 wallet[ticker] = {
@@ -332,6 +388,10 @@ class InvestmentEngine:
                 wallet_anterior = {
                     t: dict(d) for t, d in wallet.items()
                 }
+
+            if tx.operacao in ("desdobramento", "agrupamento", "conversao"):
+                self._apply_corporate_event(wallet, tx)
+                continue
 
             ticker = tx.ticker
             if ticker not in wallet:

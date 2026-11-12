@@ -119,6 +119,12 @@ def load_transactions_from_excel(filepath: str = DEFAULT_EXCEL_PATH) -> List[Tra
             
             if 'venda' in operacao:
                 operacao = 'venda'
+            elif 'desdobramento' in operacao or 'split' in operacao:
+                operacao = 'desdobramento'
+            elif 'agrupamento' in operacao or 'inplit' in operacao:
+                operacao = 'agrupamento'
+            elif 'conversao' in operacao or 'conversão' in operacao or 'incorporacao' in operacao or 'incorporação' in operacao:
+                operacao = 'conversao'
             else:
                 operacao = 'compra'
 
@@ -126,6 +132,8 @@ def load_transactions_from_excel(filepath: str = DEFAULT_EXCEL_PATH) -> List[Tra
                 tag = 'ação'
             elif 'etf' in tag:
                 tag = 'etf'
+            elif 'bdr' in tag:
+                tag = 'bdr'
             else:
                 tag = 'fii'
 

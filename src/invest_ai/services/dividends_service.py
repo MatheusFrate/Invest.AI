@@ -112,22 +112,29 @@ def calculate_historical_dividends(transactions: List[Transaction], dividends_by
             if not div_dt:
                 continue
 
-            # Calcular posição da carteira daquele ticker até div_dt
-            # Considera compras e vendas ocorridas até div_dt (inclusive)
-            qtd_na_epoca = 0.0
-            custo_na_epoca = 0.0
+            # Calcular posição da carteira até div_dt considerando compras, vendas e eventos corporativos
+            qtd_por_ticker: Dict[str, float] = {}
 
             for tx_dt, _, tx in parsed_txs:
-                if tx.ticker == ticker:
-                    if tx_dt <= div_dt:
-                        if tx.operacao == "compra":
-                            qtd_na_epoca += tx.quantidade
-                            custo_na_epoca += tx.valor_total
-                        elif tx.operacao == "venda":
-                            qtd_na_epoca -= tx.quantidade
-                            if qtd_na_epoca <= 0.0001:
-                                qtd_na_epoca = 0.0
-                                custo_na_epoca = 0.0
+                if tx_dt > div_dt:
+                    continue
+                if tx.operacao == "compra":
+                    qtd_por_ticker[tx.ticker] = qtd_por_ticker.get(tx.ticker, 0.0) + tx.quantidade
+                elif tx.operacao == "venda":
+                    nova_qtd = qtd_por_ticker.get(tx.ticker, 0.0) - tx.quantidade
+                    qtd_por_ticker[tx.ticker] = 0.0 if nova_qtd <= 0.0001 else nova_qtd
+                elif tx.operacao in ("desdobramento", "agrupamento"):
+                    if tx.quantidade > 0 and tx.ticker in qtd_por_ticker:
+                        qtd_por_ticker[tx.ticker] *= tx.quantidade
+                elif tx.operacao == "conversao" and "->" in tx.ticker:
+                    origem, destino = [p.strip().upper() for p in tx.ticker.split("->", 1)]
+                    fator = tx.quantidade if tx.quantidade > 0 else 1.0
+                    qtd_orig = qtd_por_ticker.get(origem, 0.0)
+                    if qtd_orig > 0:
+                        qtd_por_ticker[origem] = 0.0
+                        qtd_por_ticker[destino] = qtd_por_ticker.get(destino, 0.0) + qtd_orig * fator
+
+            qtd_na_epoca = qtd_por_ticker.get(ticker, 0.0)
 
             if qtd_na_epoca > 0:
                 total_pago = qtd_na_epoca * d["amount"]
