@@ -276,3 +276,130 @@ class BrokerageNoteSchema(BaseModel):
         return [tx.to_engine_transaction() for tx in self.aplicar_rateio_custos()]
 
 
+class TipoEventoCorporativo(str, Enum):
+    DESDOBRAMENTO = "desdobramento"
+    AGRUPAMENTO = "agrupamento"
+    CONVERSAO = "conversao"
+
+
+def _validar_ticker_b3(v: str) -> str:
+    clean = v.strip().upper()
+    if not re.match(r"^[A-Z0-9]{4,6}$", clean):
+        raise ValueError(
+            f"Ticker '{clean}' inválido. Esperado formato B3 (ex: PETR4, VALE3, IRDM11)."
+        )
+    return clean
+
+
+def _formatar_data_br_schema(v: str) -> str:
+    v_clean = v.strip()
+    if "/" in v_clean:
+        try:
+            dt = datetime.strptime(v_clean, "%d/%m/%Y")
+            return dt.strftime("%d/%m/%Y")
+        except ValueError:
+            pass
+    try:
+        dt = datetime.strptime(v_clean, "%Y-%m-%d")
+        return dt.strftime("%d/%m/%Y")
+    except ValueError:
+        raise ValueError(
+            f"Data '{v}' em formato inválido. Use 'DD/MM/AAAA' ou 'YYYY-MM-DD'."
+        )
+
+
+class CorporateEventSchema(BaseModel):
+    """
+    Schema estrito para eventos corporativos na B3:
+    desdobramento (split), agrupamento (inplit) e conversão/incorporação de ticker.
+    """
+    tipo_evento: TipoEventoCorporativo = Field(
+        ...,
+        description="Tipo do evento corporativo: 'desdobramento', 'agrupamento' ou 'conversao'."
+    )
+    ticker_origem: str = Field(
+        ...,
+        description="Código do ativo afetado ou ticker de origem na B3 (ex: XPML11, MGLU3, IRDM11)."
+    )
+    ticker_destino: Optional[str] = Field(
+        default=None,
+        description="Novo ticker em caso de conversão/incorporação (ex: IRIM11). Nulo para split/inplit."
+    )
+    fator: float = Field(
+        default=1.0,
+        gt=0,
+        description=(
+            "Fator de multiplicação da quantidade (> 0). "
+            "Ex: 10.0 para desdobramento 1:10; 0.1 para agrupamento 10:1; 1.0 para conversão 1:1."
+        )
+    )
+    data: str = Field(
+        default_factory=lambda: date.today().strftime("%d/%m/%Y"),
+        description="Data do evento corporativo no formato DD/MM/AAAA."
+    )
+    tipo_ativo: TipoAtivo = Field(
+        default=TipoAtivo.ACAO,
+        description="Tipo do ativo: 'ação', 'fii', 'etf' ou 'bdr'."
+    )
+    observacao: Optional[str] = Field(
+        default=None,
+        description="Observações adicionais sobre o evento corporativo."
+    )
+
+    @field_validator("ticker_origem")
+    @classmethod
+    def validar_ticker_origem(cls, v: str) -> str:
+        return _validar_ticker_b3(v)
+
+    @field_validator("ticker_destino")
+    @classmethod
+    def validar_ticker_destino(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not str(v).strip():
+            return None
+        return _validar_ticker_b3(v)
+
+    @field_validator("data")
+    @classmethod
+    def validar_data_evento(cls, v: str) -> str:
+        return _formatar_data_br_schema(v)
+
+    @model_validator(mode="after")
+    def validar_regras_evento(self) -> "CorporateEventSchema":
+        ticker_ref = self.ticker_destino or self.ticker_origem
+        if ticker_ref.endswith("11") and self.tipo_ativo == TipoAtivo.ACAO:
+            self.tipo_ativo = TipoAtivo.FII
+        elif ticker_ref.endswith("34"):
+            self.tipo_ativo = TipoAtivo.BDR
+
+        if self.tipo_evento == TipoEventoCorporativo.CONVERSAO:
+            if not self.ticker_destino:
+                raise ValueError(
+                    "Para eventos de conversão/incorporação, é obrigatório informar o 'ticker_destino'."
+                )
+            if self.ticker_destino == self.ticker_origem:
+                raise ValueError(
+                    "O 'ticker_destino' deve ser diferente do 'ticker_origem' em uma conversão."
+                )
+        return self
+
+    def to_engine_transaction(self) -> Transaction:
+        """
+        Converte este evento corporativo para a dataclass Transaction compatível com o Excel e engine.py.
+        """
+        ticker_tx = (
+            f"{self.ticker_origem}->{self.ticker_destino}"
+            if self.tipo_evento == TipoEventoCorporativo.CONVERSAO
+            else self.ticker_origem
+        )
+        return Transaction(
+            data=self.data,
+            ticker=ticker_tx,
+            tipo_ativo=self.tipo_ativo.value,
+            operacao=self.tipo_evento.value,
+            quantidade=self.fator,
+            valor_total=0.0,
+            valor_unitario=0.0,
+        )
+
+
+

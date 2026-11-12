@@ -14,8 +14,19 @@ import customtkinter as ctk
 
 from invest_ai.ui.base_window import InvestApp
 from invest_ai.agent.deps import InvestContext
-from invest_ai.agent.agent import transaction_agent, assistant_agent, brokerage_note_agent, resolver_modelo_padrao
-from invest_ai.agent.schemas import TransactionSchema, BrokerageNoteSchema
+from invest_ai.agent.agent import (
+    transaction_agent,
+    assistant_agent,
+    brokerage_note_agent,
+    corporate_event_agent,
+    resolver_modelo_padrao,
+)
+from invest_ai.agent.schemas import (
+    TransactionSchema,
+    BrokerageNoteSchema,
+    CorporateEventSchema,
+    TipoEventoCorporativo,
+)
 from invest_ai.services.excel_handler import (
     DEFAULT_EXCEL_PATH,
     save_transaction_to_excel,
@@ -366,6 +377,105 @@ class InvestAIApp(InvestApp):
         except Exception as e:
             messagebox.showerror("Erro ao Salvar", f"Não foi possível gravar a operação:\n{e}")
 
+    def _add_corporate_event_card(self, ev: CorporateEventSchema):
+        """Adiciona card estruturado para confirmação de Evento Corporativo (Human-in-the-Loop)."""
+        card = ctk.CTkFrame(
+            self.chat_scroll,
+            fg_color="#1f2937",
+            border_color="#8b5cf6",
+            border_width=1,
+            corner_radius=12
+        )
+        card.pack(fill="x", padx=10, pady=8)
+
+        titulos = {
+            TipoEventoCorporativo.DESDOBRAMENTO: "DESDOBRAMENTO (SPLIT)",
+            TipoEventoCorporativo.AGRUPAMENTO: "AGRUPAMENTO (INPLIT)",
+            TipoEventoCorporativo.CONVERSAO: "CONVERSÃO / INCORPORAÇÃO DE TICKER",
+        }
+        lbl_title = ctk.CTkLabel(
+            card,
+            text=f"🔄 Evento Corporativo: {titulos.get(ev.tipo_evento, ev.tipo_evento.value.upper())}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#a78bfa"
+        )
+        lbl_title.pack(anchor="w", padx=15, pady=(12, 6))
+
+        if ev.tipo_evento == TipoEventoCorporativo.CONVERSAO:
+            alvo_txt = f"• Origem -> Destino: {ev.ticker_origem} -> {ev.ticker_destino} ({ev.tipo_ativo.value.upper()})"
+        else:
+            alvo_txt = f"• Ativo: {ev.ticker_origem} ({ev.tipo_ativo.value.upper()})"
+
+        detalhes = (
+            f"{alvo_txt}\n"
+            f"• Fator de Multiplicação: {ev.fator:g}x\n"
+            f"• Data do Evento: {ev.data}\n"
+            f"• Impacto Fiscal (DARF): Isento (custo total de aquisição preservado)"
+        )
+        if ev.observacao:
+            detalhes += f"\n• Observação: {ev.observacao}"
+
+        lbl_details = ctk.CTkLabel(
+            card,
+            text=detalhes,
+            font=ctk.CTkFont(size=13),
+            justify="left"
+        )
+        lbl_details.pack(anchor="w", padx=15, pady=(0, 10))
+
+        btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=15, pady=(0, 12))
+
+        btn_confirmar = ctk.CTkButton(
+            btn_frame,
+            text="✔ Confirmar e Gravar na Planilha",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#8b5cf6",
+            hover_color="#7c3aed",
+            height=32,
+            command=lambda c=card, e=ev: self._confirm_and_save_corporate_event(c, e)
+        )
+        btn_confirmar.pack(side="left", padx=(0, 10))
+
+        btn_descartar = ctk.CTkButton(
+            btn_frame,
+            text="✖ Cancelar",
+            font=ctk.CTkFont(size=12),
+            fg_color="#4b5563",
+            hover_color="#374151",
+            height=32,
+            command=lambda c=card: c.destroy()
+        )
+        btn_descartar.pack(side="left")
+
+        self.chat_scroll.after(100, lambda: self.chat_scroll._parent_canvas.yview_moveto(1.0))
+
+    def _confirm_and_save_corporate_event(self, card_widget, ev: CorporateEventSchema):
+        """Salva o evento corporativo confirmado pelo usuário no Excel e atualiza a carteira."""
+        try:
+            engine_tx = ev.to_engine_transaction()
+            foi_salvo = save_transaction_to_excel(engine_tx, DEFAULT_EXCEL_PATH, prevent_duplicates=True)
+
+            card_widget.destroy()
+
+            if not foi_salvo:
+                self._add_bot_message(
+                    f"⚠️ Evento corporativo NÃO gravado pois já existe um registro idêntico na planilha:\n\n"
+                    f"• {engine_tx.operacao.upper()} de {engine_tx.ticker} (fator {ev.fator:g}x) em {ev.data}."
+                )
+                return
+
+            self.load_data()
+            self.refresh_quotes_async()
+
+            self._add_bot_message(
+                f"OK! Evento corporativo registrado com sucesso!\n\n"
+                f"• {engine_tx.operacao.upper()}: {engine_tx.ticker} (Fator: {ev.fator:g}x | Data: {ev.data}).\n"
+                f"Sua custódia e preço médio já foram recalculados mantendo o custo total de aquisição."
+            )
+        except Exception as e:
+            messagebox.showerror("Erro ao Salvar", f"Não foi possível gravar o evento corporativo:\n{e}")
+
     def _add_batch_brokerage_note_card(self, nota: BrokerageNoteSchema):
         """Adiciona card estruturado para confirmação em lote de Nota de Corretagem (Human-in-the-Loop)."""
         card = ctk.CTkFrame(
@@ -557,16 +667,32 @@ class InvestAIApp(InvestApp):
 
     def _process_ai_thread(self, prompt: str):
         try:
+            prompt_lower = prompt.lower()
+            palavras_evento = [
+                "desdobramento", "split", "agrupamento", "inplit",
+                "virou", "converteu", "conversão", "conversao",
+                "incorporou", "mudou para", "incorporação", "incorporacao"
+            ]
+            is_evento_corporativo = any(p in prompt_lower for p in palavras_evento)
+
             palavras_transacao = ["comprei", "vendi", "compra", "venda", "aporte", "adicionar"]
-            primeira_palavra = prompt.lower().split()[0] if prompt.split() else ""
-            is_transacao = primeira_palavra in palavras_transacao or any(prompt.lower().startswith(p) for p in palavras_transacao)
+            primeira_palavra = prompt_lower.split()[0] if prompt_lower.split() else ""
+            is_transacao = (
+                not is_evento_corporativo
+                and (primeira_palavra in palavras_transacao or any(prompt_lower.startswith(p) for p in palavras_transacao))
+            )
 
             max_tentativas = 2
             ultimo_erro = None
 
             for tentativa in range(max_tentativas):
                 try:
-                    if is_transacao:
+                    if is_evento_corporativo:
+                        res = corporate_event_agent.run_sync(prompt)
+                        ev_schema: CorporateEventSchema = res.output
+                        self.after(0, lambda: self._add_corporate_event_card(ev_schema))
+                        return
+                    elif is_transacao:
                         res = transaction_agent.run_sync(prompt, deps=self.ai_context)
                         tx_schema: TransactionSchema = res.output
                         self.after(0, lambda: self._add_transaction_card(tx_schema))
