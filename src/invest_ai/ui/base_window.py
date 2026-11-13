@@ -153,6 +153,19 @@ class InvestApp(ctk.CTk):
             else:
                 frame.grid_forget()
 
+    def _attach_tree_scrollbars(self, container, tree: ttk.Treeview) -> None:
+        """Anexa barras de rolagem vertical e horizontal a um ttk.Treeview dentro de container."""
+        container.grid_rowconfigure(0, weight=1)
+        container.grid_columnconfigure(0, weight=1)
+
+        y_scroll = ttk.Scrollbar(container, orient="vertical", command=tree.yview)
+        x_scroll = ttk.Scrollbar(container, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+        tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+
     # -------------------------------------------------------------
     # VIEW: CARTEIRA ATUAL
     # -------------------------------------------------------------
@@ -222,7 +235,7 @@ class InvestApp(ctk.CTk):
         tbl_container.grid_columnconfigure(0, weight=1)
 
         cols = ("ticker", "tipo", "quantidade", "preco_medio", "preco_atual", "total_investido", "patrimonio_atual", "lucro_prej", "rentabilidade")
-        self.tree_carteira = ttk.Treeview(tbl_container, columns=cols, show="headings", selectmode="browse")
+        self.tree_carteira = ttk.Treeview(tbl_container, columns=cols, show="headings", selectmode="browse", height=8)
         self.tree_carteira.heading("ticker", text="Ativo / Cota")
         self.tree_carteira.heading("tipo", text="Tipo")
         self.tree_carteira.heading("quantidade", text="Qtd")
@@ -233,20 +246,17 @@ class InvestApp(ctk.CTk):
         self.tree_carteira.heading("lucro_prej", text="Lucro/Prejuízo")
         self.tree_carteira.heading("rentabilidade", text="Rentab. (%)")
 
-        self.tree_carteira.column("ticker", width=95, anchor="center")
-        self.tree_carteira.column("tipo", width=75, anchor="center")
-        self.tree_carteira.column("quantidade", width=85, anchor="e")
-        self.tree_carteira.column("preco_medio", width=120, anchor="e")
-        self.tree_carteira.column("preco_atual", width=120, anchor="e")
-        self.tree_carteira.column("total_investido", width=125, anchor="e")
-        self.tree_carteira.column("patrimonio_atual", width=130, anchor="e")
-        self.tree_carteira.column("lucro_prej", width=125, anchor="e")
-        self.tree_carteira.column("rentabilidade", width=105, anchor="e")
+        self.tree_carteira.column("ticker", width=95, minwidth=85, anchor="center")
+        self.tree_carteira.column("tipo", width=75, minwidth=65, anchor="center")
+        self.tree_carteira.column("quantidade", width=85, minwidth=70, anchor="e")
+        self.tree_carteira.column("preco_medio", width=120, minwidth=105, anchor="e")
+        self.tree_carteira.column("preco_atual", width=120, minwidth=105, anchor="e")
+        self.tree_carteira.column("total_investido", width=125, minwidth=110, anchor="e")
+        self.tree_carteira.column("patrimonio_atual", width=130, minwidth=115, anchor="e")
+        self.tree_carteira.column("lucro_prej", width=125, minwidth=110, anchor="e")
+        self.tree_carteira.column("rentabilidade", width=105, minwidth=95, anchor="e")
 
-        scrollbar = ttk.Scrollbar(tbl_container, orient="vertical", command=self.tree_carteira.yview)
-        self.tree_carteira.configure(yscrollcommand=scrollbar.set)
-        self.tree_carteira.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        self._attach_tree_scrollbars(tbl_container, self.tree_carteira)
 
         return frame
 
@@ -257,6 +267,7 @@ class InvestApp(ctk.CTk):
         frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(3, weight=1)
+        frame.grid_rowconfigure(5, weight=2)
 
         title = ctk.CTkLabel(
             frame, text="Apuração de Vendas & Cálculo de DARF", 
@@ -296,7 +307,7 @@ class InvestApp(ctk.CTk):
         tbl_darf_container.grid_columnconfigure(0, weight=1)
 
         darf_cols = ("mes", "tipo", "total_vendas", "resultado", "prej_compensado", "base_calc", "imposto_devido", "prej_acumulado", "status_pgto")
-        self.tree_darf = ttk.Treeview(tbl_darf_container, columns=darf_cols, show="headings", selectmode="browse")
+        self.tree_darf = ttk.Treeview(tbl_darf_container, columns=darf_cols, show="headings", selectmode="browse", height=5)
         self.tree_darf.heading("mes", text="Mês/Ano")
         self.tree_darf.heading("tipo", text="Tipo")
         self.tree_darf.heading("total_vendas", text="Total Vendido")
@@ -308,10 +319,10 @@ class InvestApp(ctk.CTk):
         self.tree_darf.heading("status_pgto", text="Situação DARF")
 
         for c in darf_cols:
-            self.tree_darf.column(c, anchor="center" if c in ["mes", "tipo", "status_pgto"] else "e", width=105)
-        self.tree_darf.column("status_pgto", width=130)
+            self.tree_darf.column(c, anchor="center" if c in ["mes", "tipo", "status_pgto"] else "e", width=110, minwidth=95)
+        self.tree_darf.column("status_pgto", width=135, minwidth=115)
 
-        self.tree_darf.grid(row=0, column=0, sticky="nsew")
+        self._attach_tree_scrollbars(tbl_darf_container, self.tree_darf)
 
         lbl_sub2 = ctk.CTkLabel(frame, text="🧾 Histórico Detalhado de Vendas", font=ctk.CTkFont(size=15, weight="bold"))
         lbl_sub2.grid(row=4, column=0, sticky="w", pady=(5, 5))
@@ -322,7 +333,7 @@ class InvestApp(ctk.CTk):
         tbl_sales_container.grid_columnconfigure(0, weight=1)
 
         sale_cols = ("data", "ticker", "tipo", "qtd", "pm_compra", "preco_venda", "total_venda", "resultado")
-        self.tree_sales = ttk.Treeview(tbl_sales_container, columns=sale_cols, show="headings", selectmode="browse")
+        self.tree_sales = ttk.Treeview(tbl_sales_container, columns=sale_cols, show="headings", selectmode="browse", height=8)
         self.tree_sales.heading("data", text="Data")
         self.tree_sales.heading("ticker", text="Ativo")
         self.tree_sales.heading("tipo", text="Tipo")
@@ -333,12 +344,9 @@ class InvestApp(ctk.CTk):
         self.tree_sales.heading("resultado", text="Resultado")
 
         for c in sale_cols:
-            self.tree_sales.column(c, anchor="center" if c in ["data", "ticker", "tipo"] else "e", width=105)
+            self.tree_sales.column(c, anchor="center" if c in ["data", "ticker", "tipo"] else "e", width=105, minwidth=90)
 
-        scrollbar_s = ttk.Scrollbar(tbl_sales_container, orient="vertical", command=self.tree_sales.yview)
-        self.tree_sales.configure(yscrollcommand=scrollbar_s.set)
-        self.tree_sales.grid(row=0, column=0, sticky="nsew")
-        scrollbar_s.grid(row=0, column=1, sticky="ns")
+        self._attach_tree_scrollbars(tbl_sales_container, self.tree_sales)
 
         return frame
 
@@ -350,7 +358,7 @@ class InvestApp(ctk.CTk):
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(2, weight=0)
         frame.grid_rowconfigure(4, weight=1)
-        frame.grid_rowconfigure(6, weight=1)
+        frame.grid_rowconfigure(6, weight=2)
 
         # Cabeçalho com Título e Botão de Consulta de Proventos
         header_frame = ctk.CTkFrame(frame, fg_color="transparent")
@@ -397,18 +405,18 @@ class InvestApp(ctk.CTk):
         tbl_month_container.grid_columnconfigure(0, weight=1)
 
         month_cols = ("mes", "total_recebido", "ativos_pagadores", "yield_mes")
-        self.tree_proventos_mes = ttk.Treeview(tbl_month_container, columns=month_cols, show="headings", selectmode="browse")
+        self.tree_proventos_mes = ttk.Treeview(tbl_month_container, columns=month_cols, show="headings", selectmode="browse", height=4)
         self.tree_proventos_mes.heading("mes", text="Mês/Ano")
         self.tree_proventos_mes.heading("total_recebido", text="Total Recebido (R$)")
         self.tree_proventos_mes.heading("ativos_pagadores", text="Qtd Ativos Pagadores")
         self.tree_proventos_mes.heading("yield_mes", text="Yield no Mês (%)")
 
-        self.tree_proventos_mes.column("mes", anchor="center", width=120)
-        self.tree_proventos_mes.column("total_recebido", anchor="e", width=150)
-        self.tree_proventos_mes.column("ativos_pagadores", anchor="center", width=150)
-        self.tree_proventos_mes.column("yield_mes", anchor="e", width=130)
+        self.tree_proventos_mes.column("mes", anchor="center", width=120, minwidth=110)
+        self.tree_proventos_mes.column("total_recebido", anchor="e", width=150, minwidth=110)
+        self.tree_proventos_mes.column("ativos_pagadores", anchor="center", width=150, minwidth=110)
+        self.tree_proventos_mes.column("yield_mes", anchor="e", width=130, minwidth=110)
 
-        self.tree_proventos_mes.grid(row=0, column=0, sticky="nsew")
+        self._attach_tree_scrollbars(tbl_month_container, self.tree_proventos_mes)
 
         # Tabela 2: Detalhamento por Ativo / Pagamento
         lbl_sub2 = ctk.CTkLabel(frame, text="🧾 Detalhamento por Ativo e Pagamento Oficial", font=ctk.CTkFont(size=15, weight="bold"))
@@ -420,23 +428,20 @@ class InvestApp(ctk.CTk):
         tbl_divs_container.grid_columnconfigure(0, weight=1)
 
         div_cols = ("data", "ticker", "qtd_cotas", "valor_cota", "total_pago")
-        self.tree_proventos_detalhe = ttk.Treeview(tbl_divs_container, columns=div_cols, show="headings", selectmode="browse")
+        self.tree_proventos_detalhe = ttk.Treeview(tbl_divs_container, columns=div_cols, show="headings", selectmode="browse", height=6)
         self.tree_proventos_detalhe.heading("data", text="Data / Mês")
         self.tree_proventos_detalhe.heading("ticker", text="Ativo / Cota")
         self.tree_proventos_detalhe.heading("qtd_cotas", text="Qtd Cotas")
         self.tree_proventos_detalhe.heading("valor_cota", text="Provento / Cota")
         self.tree_proventos_detalhe.heading("total_pago", text="Total Recebido")
 
-        self.tree_proventos_detalhe.column("data", anchor="center", width=120)
-        self.tree_proventos_detalhe.column("ticker", anchor="center", width=120)
-        self.tree_proventos_detalhe.column("qtd_cotas", anchor="e", width=120)
-        self.tree_proventos_detalhe.column("valor_cota", anchor="e", width=130)
-        self.tree_proventos_detalhe.column("total_pago", anchor="e", width=140)
+        self.tree_proventos_detalhe.column("data", anchor="center", width=120, minwidth=110)
+        self.tree_proventos_detalhe.column("ticker", anchor="center", width=120, minwidth=110)
+        self.tree_proventos_detalhe.column("qtd_cotas", anchor="e", width=120, minwidth=110)
+        self.tree_proventos_detalhe.column("valor_cota", anchor="e", width=130, minwidth=110)
+        self.tree_proventos_detalhe.column("total_pago", anchor="e", width=140, minwidth=110)
 
-        scrollbar_d = ttk.Scrollbar(tbl_divs_container, orient="vertical", command=self.tree_proventos_detalhe.yview)
-        self.tree_proventos_detalhe.configure(yscrollcommand=scrollbar_d.set)
-        self.tree_proventos_detalhe.grid(row=0, column=0, sticky="nsew")
-        scrollbar_d.grid(row=0, column=1, sticky="ns")
+        self._attach_tree_scrollbars(tbl_divs_container, self.tree_proventos_detalhe)
 
         self._render_proventos_chart({})
         return frame
@@ -581,7 +586,7 @@ class InvestApp(ctk.CTk):
         tbl_container.grid_columnconfigure(0, weight=1)
 
         cols = ("id", "data", "cota", "tipo", "operacao", "quantidade", "preco_unit", "valor_total")
-        self.tree_historico = ttk.Treeview(tbl_container, columns=cols, show="headings", selectmode="browse")
+        self.tree_historico = ttk.Treeview(tbl_container, columns=cols, show="headings", selectmode="browse", height=12)
         
         # Cabeçalhos com ordenação por clique
         self.tree_historico.heading("id", text="#", command=lambda: self._sort_historico("id"))
@@ -593,22 +598,19 @@ class InvestApp(ctk.CTk):
         self.tree_historico.heading("preco_unit", text="Preço Unit. ↕", command=lambda: self._sort_historico("preco_unit"))
         self.tree_historico.heading("valor_total", text="Valor Total ↕", command=lambda: self._sort_historico("valor_total"))
 
-        self.tree_historico.column("id", width=45, anchor="center")
-        self.tree_historico.column("data", width=100, anchor="center")
-        self.tree_historico.column("cota", width=100, anchor="center")
-        self.tree_historico.column("tipo", width=80, anchor="center")
-        self.tree_historico.column("operacao", width=90, anchor="center")
-        self.tree_historico.column("quantidade", width=90, anchor="e")
-        self.tree_historico.column("preco_unit", width=110, anchor="e")
-        self.tree_historico.column("valor_total", width=120, anchor="e")
+        self.tree_historico.column("id", width=45, minwidth=40, anchor="center")
+        self.tree_historico.column("data", width=100, minwidth=90, anchor="center")
+        self.tree_historico.column("cota", width=110, minwidth=95, anchor="center")
+        self.tree_historico.column("tipo", width=80, minwidth=70, anchor="center")
+        self.tree_historico.column("operacao", width=95, minwidth=85, anchor="center")
+        self.tree_historico.column("quantidade", width=90, minwidth=75, anchor="e")
+        self.tree_historico.column("preco_unit", width=110, minwidth=95, anchor="e")
+        self.tree_historico.column("valor_total", width=120, minwidth=105, anchor="e")
 
         # Double click para editar
         self.tree_historico.bind("<Double-1>", lambda event: self.edit_selected_operation())
 
-        scrollbar = ttk.Scrollbar(tbl_container, orient="vertical", command=self.tree_historico.yview)
-        self.tree_historico.configure(yscrollcommand=scrollbar.set)
-        self.tree_historico.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        self._attach_tree_scrollbars(tbl_container, self.tree_historico)
 
         return frame
 

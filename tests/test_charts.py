@@ -93,3 +93,42 @@ def test_create_monthly_dividends_figure_ordenacao_cronologica_e_vazio():
     fig_vazia = create_monthly_dividends_figure({})
     ax_vazia = fig_vazia.axes[0]
     assert any("Sem proventos registrados" in t.get_text() for t in ax_vazia.texts)
+
+
+def test_attach_tree_scrollbars_configures_x_and_y_scroll(monkeypatch):
+    from unittest.mock import MagicMock
+    from invest_ai.ui import base_window
+
+    created_scrollbars = []
+
+    class FakeScrollbar:
+        def __init__(self, parent, orient=None, command=None):
+            self.parent = parent
+            self.orient = orient
+            self.command = command
+            self.set = MagicMock()
+            self.grid = MagicMock()
+            created_scrollbars.append(self)
+
+    monkeypatch.setattr(base_window.ttk, "Scrollbar", FakeScrollbar)
+
+    container = MagicMock()
+    tree = MagicMock()
+
+    app = base_window.InvestApp.__new__(base_window.InvestApp)
+    app._attach_tree_scrollbars(container, tree)
+
+    container.grid_rowconfigure.assert_called_once_with(0, weight=1)
+    container.grid_columnconfigure.assert_called_once_with(0, weight=1)
+
+    assert len(created_scrollbars) == 2
+    y_sb, x_sb = created_scrollbars
+    assert y_sb.orient == "vertical"
+    assert y_sb.command is tree.yview
+    assert x_sb.orient == "horizontal"
+    assert x_sb.command is tree.xview
+
+    tree.configure.assert_called_once_with(yscrollcommand=y_sb.set, xscrollcommand=x_sb.set)
+    tree.grid.assert_called_once_with(row=0, column=0, sticky="nsew")
+    y_sb.grid.assert_called_once_with(row=0, column=1, sticky="ns")
+    x_sb.grid.assert_called_once_with(row=1, column=0, sticky="ew")
