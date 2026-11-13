@@ -162,15 +162,26 @@ class InvestApp(ctk.CTk):
         head_fg = "#94a3b8" if dark else "#475569"
         head_active = "#1e293b" if dark else "#e2e8f0"
         scroll_bg = "#334155" if dark else "#cbd5e1"
+        scroll_hover = "#475569" if dark else "#94a3b8"
         scroll_trough = "#0f172a" if dark else "#f1f5f9"
         scroll_arrow = "#94a3b8" if dark else "#475569"
+
+        # Remove o elemento Treeview.field do tema clam para eliminar a borda branca 3D
+        try:
+            style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+        except tk.TclError:
+            pass
 
         style.configure(
             "Treeview",
             background=bg,
             foreground=fg,
             fieldbackground=bg,
+            relief="flat",
             borderwidth=0,
+            lightcolor=bg,
+            darkcolor=bg,
+            bordercolor=bg,
             rowheight=32,
             font=(UI_FONTS["family"], 10),
         )
@@ -185,6 +196,9 @@ class InvestApp(ctk.CTk):
             foreground=head_fg,
             relief="flat",
             borderwidth=0,
+            lightcolor=head_bg,
+            darkcolor=head_bg,
+            bordercolor=head_bg,
             padding=(8, 6),
             font=(UI_FONTS["family"], 10, "bold"),
         )
@@ -193,22 +207,23 @@ class InvestApp(ctk.CTk):
             background=[("active", head_active)],
             foreground=[("active", fg)],
         )
-        style.configure(
-            "Vertical.TScrollbar",
-            background=scroll_bg,
-            troughcolor=scroll_trough,
-            bordercolor=scroll_trough,
-            arrowcolor=scroll_arrow,
-            relief="flat",
-        )
-        style.configure(
-            "Horizontal.TScrollbar",
-            background=scroll_bg,
-            troughcolor=scroll_trough,
-            bordercolor=scroll_trough,
-            arrowcolor=scroll_arrow,
-            relief="flat",
-        )
+        for sb_style in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+            style.configure(
+                sb_style,
+                background=scroll_bg,
+                troughcolor=scroll_trough,
+                bordercolor=scroll_trough,
+                lightcolor=scroll_trough,
+                darkcolor=scroll_trough,
+                arrowcolor=scroll_arrow,
+                borderwidth=0,
+                gripcount=0,
+                relief="flat",
+            )
+            style.map(
+                sb_style,
+                background=[("active", scroll_hover)],
+            )
 
         # Atualiza tags de zebra/semântica em todas as tabelas já criadas
         even_bg = "#1e293b" if dark else "#ffffff"
@@ -1623,21 +1638,20 @@ class InvestApp(ctk.CTk):
     # AUXILIARES VISUAIS & DADOS
     # -------------------------------------------------------------
     def _create_stat_card(self, parent, col, title, initial_val, color):
-        """Cria card de KPI moderno com superfície elevada, borda sutil e barra lateral de acento."""
+        """Cria card de KPI compacto com superfície elevada, borda sutil e barra lateral de acento."""
         card = ctk.CTkFrame(
             parent,
             fg_color=UI_COLORS["bg_surface"],
-            corner_radius=12,
+            corner_radius=10,
             border_width=1,
             border_color=UI_COLORS["border"],
         )
         padx = (0, 6) if col == 0 else (6, 0)
         card.grid(row=0, column=col, padx=padx, pady=2, sticky="ew")
         card.grid_columnconfigure(1, weight=1)
-        card.grid_rowconfigure(0, weight=1)
 
-        accent_bar = ctk.CTkFrame(card, width=4, fg_color=color, corner_radius=4)
-        accent_bar.grid(row=0, column=0, rowspan=2, padx=(10, 0), pady=12, sticky="ns")
+        accent_bar = ctk.CTkFrame(card, width=4, height=36, fg_color=color, corner_radius=2)
+        accent_bar.grid(row=0, column=0, rowspan=2, padx=(10, 0), pady=10, sticky="ns")
 
         lbl_title = ctk.CTkLabel(
             card,
@@ -1647,7 +1661,7 @@ class InvestApp(ctk.CTk):
             anchor="w",
             justify="left",
         )
-        lbl_title.grid(row=0, column=1, padx=(12, 14), pady=(12, 2), sticky="ew")
+        lbl_title.grid(row=0, column=1, padx=(10, 12), pady=(8, 1), sticky="ew")
 
         lbl_val = ctk.CTkLabel(
             card,
@@ -1657,7 +1671,7 @@ class InvestApp(ctk.CTk):
             anchor="w",
             justify="left",
         )
-        lbl_val.grid(row=1, column=1, padx=(12, 14), pady=(0, 12), sticky="ew")
+        lbl_val.grid(row=1, column=1, padx=(10, 12), pady=(0, 8), sticky="ew")
 
         return lbl_val
 

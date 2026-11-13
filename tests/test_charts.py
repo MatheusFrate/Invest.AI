@@ -320,3 +320,80 @@ def test_attach_matplotlib_tooltip_hover_updates_visibility():
     assert hasattr(bar, "_tooltip_text")
     assert "MXRF11" in bar._tooltip_text
 
+
+def test_create_stat_card_compact_accent_bar(monkeypatch):
+    from unittest.mock import MagicMock
+    from invest_ai.ui import base_window
+
+    created_frames = []
+
+    class FakeFrame:
+        def __init__(self, master=None, **kwargs):
+            self.master = master
+            self.kwargs = kwargs
+            self.grid = MagicMock()
+            self.grid_columnconfigure = MagicMock()
+            self.grid_rowconfigure = MagicMock()
+            created_frames.append(self)
+
+    class FakeLabel:
+        def __init__(self, master=None, **kwargs):
+            self.master = master
+            self.kwargs = kwargs
+            self.grid = MagicMock()
+
+    monkeypatch.setattr(base_window.ctk, "CTkFrame", FakeFrame)
+    monkeypatch.setattr(base_window.ctk, "CTkLabel", FakeLabel)
+    monkeypatch.setattr(base_window.ctk, "CTkFont", lambda *a, **kw: ("Segoe UI", 12))
+
+    app = base_window.InvestApp.__new__(base_window.InvestApp)
+    parent = MagicMock()
+    lbl_val = app._create_stat_card(parent, 0, "TOTAL INVESTIDO", "R$ 100,00", "#3b82f6")
+
+    assert lbl_val is not None
+    assert len(created_frames) == 2
+    card, accent_bar = created_frames
+    assert card.kwargs.get("corner_radius") == 10
+    card.grid_rowconfigure.assert_not_called()
+    assert accent_bar.kwargs.get("height") is not None
+    assert accent_bar.kwargs["height"] <= 48
+
+
+def test_configure_treeview_style_removes_white_borders(monkeypatch):
+    from unittest.mock import MagicMock
+    from invest_ai.ui import base_window
+
+    fake_style = MagicMock()
+    monkeypatch.setattr(base_window.ttk, "Style", lambda master=None: fake_style)
+
+    app = base_window.InvestApp.__new__(base_window.InvestApp)
+    app.tk = None
+    app._is_dark_mode = lambda: True
+    app._configure_treeview_style()
+
+    fake_style.layout.assert_called_once_with(
+        "Treeview", [("Treeview.treearea", {"sticky": "nswe"})]
+    )
+
+    configured = {
+        call.args[0]: call.kwargs
+        for call in fake_style.configure.call_args_list
+    }
+    assert configured["Treeview"]["borderwidth"] == 0
+    assert configured["Treeview"]["relief"] == "flat"
+    assert configured["Treeview"]["lightcolor"] == "#1e293b"
+    assert configured["Treeview"]["darkcolor"] == "#1e293b"
+    assert configured["Treeview"]["bordercolor"] == "#1e293b"
+
+    assert configured["Treeview.Heading"]["lightcolor"] == "#0f172a"
+    assert configured["Treeview.Heading"]["darkcolor"] == "#0f172a"
+    assert configured["Treeview.Heading"]["bordercolor"] == "#0f172a"
+
+    for sb in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+        assert configured[sb]["borderwidth"] == 0
+        assert configured[sb]["gripcount"] == 0
+        assert configured[sb]["lightcolor"] == "#0f172a"
+        assert configured[sb]["darkcolor"] == "#0f172a"
+        assert configured[sb]["bordercolor"] == "#0f172a"
+
+
