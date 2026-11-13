@@ -1,57 +1,187 @@
 """
-Módulo de geração de gráficos financeiros estilizados (Dark Theme) com Matplotlib.
+Módulo de geração de gráficos financeiros estilizados (Dark / Light Theme) com Matplotlib.
 Fornece funções puras que retornam objetos matplotlib.figure.Figure para integração
 no CustomTkinter (FigureCanvasTkAgg) e validação headless em testes unitários.
 """
 
+import math
 from typing import Dict, List, Optional, Tuple
 from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter
 
 
-BG_COLOR = "#2b2b2b"
-TEXT_COLOR = "#e5e7eb"
-MUTED_TEXT_COLOR = "#9ca3af"
-GRID_COLOR = "#3f3f46"
+FONT_FAMILY = ["Segoe UI", "DejaVu Sans", "sans-serif"]
+
+# Tokens padrão (Dark Theme alinhado ao UI_COLORS de base_window.py)
+BG_COLOR = "#1e293b"
+SURFACE_ALT_COLOR = "#243044"
+TEXT_COLOR = "#f8fafc"
+MUTED_TEXT_COLOR = "#94a3b8"
+SUBTLE_TEXT_COLOR = "#64748b"
+GRID_COLOR = "#334155"
+ACCENT_PRIMARY = "#6366f1"
+ACCENT_BLUE = "#3b82f6"
 ACCENT_GREEN = "#10b981"
 ACCENT_RED = "#ef4444"
 ACCENT_AMBER = "#f59e0b"
 PALETTE = [
-    "#3b82f6",
+    "#6366f1",
     "#10b981",
+    "#3b82f6",
     "#f59e0b",
-    "#8b5cf6",
     "#ec4899",
     "#06b6d4",
-    "#f97316",
+    "#8b5cf6",
     "#14b8a6",
 ]
 
+CHART_THEMES: Dict[str, Dict[str, str]] = {
+    "dark": {
+        "bg": "#1e293b",
+        "surface_alt": "#243044",
+        "text": "#f8fafc",
+        "muted": "#94a3b8",
+        "subtle": "#64748b",
+        "grid": "#334155",
+        "zero_line": "#475569",
+        "tooltip_bg": "#0f172a",
+        "tooltip_border": "#334155",
+        "tooltip_text": "#f8fafc",
+        "donut_edge": "#1e293b",
+        "donut_pct": "#ffffff",
+        "primary": "#6366f1",
+        "blue": "#3b82f6",
+        "green": "#10b981",
+        "red": "#ef4444",
+        "amber": "#f59e0b",
+    },
+    "light": {
+        "bg": "#ffffff",
+        "surface_alt": "#f1f5f9",
+        "text": "#0f172a",
+        "muted": "#475569",
+        "subtle": "#64748b",
+        "grid": "#e2e8f0",
+        "zero_line": "#cbd5e1",
+        "tooltip_bg": "#0f172a",
+        "tooltip_border": "#334155",
+        "tooltip_text": "#f8fafc",
+        "donut_edge": "#ffffff",
+        "donut_pct": "#ffffff",
+        "primary": "#6366f1",
+        "blue": "#3b82f6",
+        "green": "#10b981",
+        "red": "#ef4444",
+        "amber": "#f59e0b",
+    },
+}
 
-def _criar_figura_base(figsize: Tuple[float, float]) -> Tuple[Figure, any]:
-    """Cria uma Figure e um Axes com estilização Dark consistente."""
-    fig = Figure(figsize=figsize, dpi=100, facecolor=BG_COLOR)
+
+def get_chart_theme(theme: str = "dark") -> Dict[str, str]:
+    """Retorna o dicionário de tokens de cores para o tema solicitado ('dark' ou 'light')."""
+    return CHART_THEMES.get((theme or "dark").strip().lower(), CHART_THEMES["dark"])
+
+
+def _format_brl(valor: float, signed: bool = False) -> str:
+    """Formata um valor numérico no padrão monetário brasileiro (R$ 1.234,56)."""
+    formatted = f"{abs(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    if signed:
+        sinal = "+" if valor >= 0 else "-"
+        return f"{sinal}R$ {formatted}"
+    if valor < 0:
+        return f"-R$ {formatted}"
+    return f"R$ {formatted}"
+
+
+def _criar_figura_base(
+    figsize: Tuple[float, float], theme: str = "dark"
+) -> Tuple[Figure, any, Dict[str, str]]:
+    """Cria uma Figure e um Axes com estilização moderna consistente com o tema."""
+    t = get_chart_theme(theme)
+    fig = Figure(figsize=figsize, dpi=100, facecolor=t["bg"])
+    fig._chart_theme_tokens = t
     ax = fig.add_subplot(111)
-    ax.set_facecolor(BG_COLOR)
-    ax.tick_params(colors=TEXT_COLOR, labelsize=8)
+    ax.set_facecolor(t["bg"])
+    ax.tick_params(colors=t["muted"], labelsize=8, length=0, pad=5)
     for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
     for spine in ("bottom", "left"):
-        ax.spines[spine].set_color(GRID_COLOR)
-    return fig, ax
+        ax.spines[spine].set_color(t["grid"])
+        ax.spines[spine].set_linewidth(0.8)
+    return fig, ax, t
 
 
-def _renderizar_estado_vazio(ax, titulo: str, mensagem: str) -> None:
-    """Exibe mensagem centralizada quando não há dados para plotagem."""
+def _aplicar_titulo(ax, titulo: str, t: Dict[str, str]) -> None:
+    """Aplica título padronizado ao eixo."""
+    ax.set_title(
+        titulo,
+        color=t["text"],
+        fontsize=10.5,
+        fontweight="bold",
+        pad=10,
+        fontfamily=FONT_FAMILY,
+    )
+
+
+def _configurar_grid(
+    ax,
+    axis: str,
+    t: Dict[str, str],
+    zero_line: bool = False,
+    hide_spines: Tuple[str, ...] = (),
+) -> None:
+    """Configura gridlines sutis, linha de referência zero e visibilidade de spines."""
+    ax.set_axisbelow(True)
+    if axis == "x":
+        ax.xaxis.grid(True, linestyle=(0, (3, 3)), alpha=0.65, linewidth=0.7, color=t["grid"])
+        if zero_line:
+            ax.axvline(0, color=t["zero_line"], linewidth=1.0, zorder=2)
+    elif axis == "y":
+        ax.yaxis.grid(True, linestyle=(0, (3, 3)), alpha=0.65, linewidth=0.7, color=t["grid"])
+        if zero_line:
+            ax.axhline(0, color=t["zero_line"], linewidth=1.0, zorder=2)
+    for spine in hide_spines:
+        ax.spines[spine].set_visible(False)
+
+
+def _renderizar_estado_vazio(
+    ax,
+    titulo: str,
+    mensagem: str,
+    t: Optional[Dict[str, str]] = None,
+    subtitulo: str = "Os dados aparecerão aqui assim que houver movimentações.",
+) -> None:
+    """Exibe cartão centralizado elegante quando não há dados para plotagem."""
+    tokens = t or CHART_THEMES["dark"]
     ax.axis("off")
-    ax.set_title(titulo, color=TEXT_COLOR, fontsize=10, fontweight="bold", pad=8)
+    _aplicar_titulo(ax, titulo, tokens)
     ax.text(
         0.5,
-        0.5,
+        0.56,
         mensagem,
         ha="center",
         va="center",
-        color=MUTED_TEXT_COLOR,
-        fontsize=9,
+        color=tokens["text"],
+        fontsize=9.5,
+        fontweight="bold",
+        fontfamily=FONT_FAMILY,
+        transform=ax.transAxes,
+        bbox=dict(
+            boxstyle="round,pad=0.65",
+            facecolor=tokens["surface_alt"],
+            edgecolor=tokens["grid"],
+            linewidth=1.0,
+        ),
+    )
+    ax.text(
+        0.5,
+        0.34,
+        subtitulo,
+        ha="center",
+        va="center",
+        color=tokens["muted"],
+        fontsize=8,
+        fontfamily=FONT_FAMILY,
         transform=ax.transAxes,
     )
 
@@ -89,9 +219,10 @@ def create_allocation_by_class_figure(
     wallet: Dict[str, Dict],
     live_quotes: Optional[Dict[str, Dict]] = None,
     figsize: Tuple[float, float] = (4.5, 2.5),
+    theme: str = "dark",
 ) -> Figure:
     """Gera gráfico de rosca (donut) com a alocação da carteira por classe de ativo."""
-    fig, ax = _criar_figura_base(figsize)
+    fig, ax, t = _criar_figura_base(figsize, theme=theme)
     ativos = _calcular_valores_ativos(wallet, live_quotes)
 
     por_classe: Dict[str, float] = {}
@@ -100,8 +231,8 @@ def create_allocation_by_class_figure(
 
     total = sum(por_classe.values())
     if total <= 0:
-        _renderizar_estado_vazio(ax, "Alocação por Classe", "Sem ativos em custódia")
-        fig.tight_layout()
+        _renderizar_estado_vazio(ax, "Alocação por Classe", "Sem ativos em custódia", t=t)
+        fig.tight_layout(pad=1.0)
         return fig
 
     ordenado = sorted(por_classe.items(), key=lambda x: x[1], reverse=True)
@@ -112,37 +243,58 @@ def create_allocation_by_class_figure(
     wedges, _, autotexts = ax.pie(
         valores,
         colors=cores,
-        autopct="%1.1f%%",
-        pctdistance=0.77,
+        autopct=lambda pct: f"{pct:.1f}%" if pct >= 4.0 else "",
+        pctdistance=0.79,
         startangle=90,
-        wedgeprops=dict(width=0.45, edgecolor=BG_COLOR, linewidth=2),
-        textprops=dict(color=TEXT_COLOR, fontsize=8, fontweight="bold"),
+        counterclock=False,
+        wedgeprops=dict(width=0.42, edgecolor=t["donut_edge"], linewidth=2.2),
+        textprops=dict(color=t["donut_pct"], fontsize=7.5, fontweight="bold", fontfamily=FONT_FAMILY),
     )
     for txt in autotexts:
-        txt.set_color("#ffffff")
+        txt.set_color(t["donut_pct"])
+
+    # Rótulo central dentro da rosca com o patrimônio total
+    ax.text(
+        0,
+        0.09,
+        "Total",
+        ha="center",
+        va="center",
+        color=t["muted"],
+        fontsize=7.5,
+        fontfamily=FONT_FAMILY,
+    )
+    ax.text(
+        0,
+        -0.11,
+        _format_brl(total),
+        ha="center",
+        va="center",
+        color=t["text"],
+        fontsize=8.5,
+        fontweight="bold",
+        fontfamily=FONT_FAMILY,
+    )
 
     for wedge, lbl, val in zip(wedges, labels, valores):
         pct = (val / total) * 100.0 if total > 0 else 0.0
-        wedge._tooltip_text = (
-            f"{lbl}: R$ {val:,.2f} ({pct:.1f}%)"
-            .replace(",", "X").replace(".", ",").replace("X", ".")
-        )
+        wedge._tooltip_text = f"{lbl}: {_format_brl(val)} ({pct:.1f}%)"
 
-    legend_labels = [
-        f"{lbl}: R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        for lbl, val in zip(labels, valores)
-    ]
+    legend_labels = [f"{lbl}: {_format_brl(val)}" for lbl, val in zip(labels, valores)]
     ax.legend(
         wedges,
         legend_labels,
         loc="center left",
-        bbox_to_anchor=(0.95, 0.5),
+        bbox_to_anchor=(0.98, 0.5),
         frameon=False,
-        labelcolor=TEXT_COLOR,
+        labelcolor=t["text"],
         fontsize=8,
+        handlelength=1.1,
+        handleheight=0.9,
+        labelspacing=0.6,
     )
-    ax.set_title("Alocação por Classe", color=TEXT_COLOR, fontsize=10, fontweight="bold", pad=8)
-    fig.tight_layout()
+    _aplicar_titulo(ax, "Alocação por Classe", t)
+    fig.tight_layout(pad=1.0)
     return fig
 
 
@@ -151,19 +303,20 @@ def create_allocation_by_ticker_figure(
     live_quotes: Optional[Dict[str, Dict]] = None,
     top_n: int = 8,
     figsize: Tuple[float, float] = (5.0, 2.5),
+    theme: str = "dark",
 ) -> Figure:
     """Gera gráfico de barras horizontais com o percentual dos principais ativos."""
-    fig, ax = _criar_figura_base(figsize)
+    fig, ax, t = _criar_figura_base(figsize, theme=theme)
     ativos = _calcular_valores_ativos(wallet, live_quotes)
 
     total = sum(v for _, _, v in ativos)
     if total <= 0:
-        _renderizar_estado_vazio(ax, "Distribuição por Ativo (%)", "Sem ativos em custódia")
-        fig.tight_layout()
+        _renderizar_estado_vazio(ax, "Distribuição por Ativo (%)", "Sem ativos em custódia", t=t)
+        fig.tight_layout(pad=1.0)
         return fig
 
     ordenado = sorted(ativos, key=lambda x: x[2], reverse=True)
-    principais = [(t, v) for t, _, v in ordenado[:top_n]]
+    principais = [(tk, v) for tk, _, v in ordenado[:top_n]]
     if len(ordenado) > top_n:
         restante = sum(v for _, _, v in ordenado[top_n:])
         if restante > 0:
@@ -171,38 +324,38 @@ def create_allocation_by_ticker_figure(
 
     # Inverte para que o maior fique no topo do barh
     principais_rev = list(reversed(principais))
-    tickers = [t for t, _ in principais_rev]
+    tickers = [tk for tk, _ in principais_rev]
     percentuais = [(v / total) * 100.0 for _, v in principais_rev]
     cores = [
-        PALETTE[(len(principais) - 1 - idx) % len(PALETTE)]
-        for idx in range(len(principais_rev))
+        t["subtle"]
+        if tk == "OUTROS"
+        else PALETTE[(len(principais) - 1 - idx) % len(PALETTE)]
+        for idx, tk in enumerate(tickers)
     ]
 
-    bars = ax.barh(tickers, percentuais, color=cores, height=0.6)
+    bars = ax.barh(tickers, percentuais, color=cores, height=0.58, alpha=0.95)
     max_pct = max(percentuais) if percentuais else 10.0
-    ax.set_xlim(0, max_pct * 1.25)
-    ax.spines["left"].set_color(GRID_COLOR)
-    ax.spines["bottom"].set_color(GRID_COLOR)
-    ax.xaxis.grid(True, linestyle="--", alpha=0.25, color=GRID_COLOR)
-    ax.set_axisbelow(True)
+    ax.set_xlim(0, max_pct * 1.24)
+    _configurar_grid(ax, "x", t, hide_spines=("left", "bottom"))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.0f}%"))
+    ax.tick_params(axis="y", colors=t["text"], labelsize=8.5)
 
     for (ticker, val), bar, pct in zip(principais_rev, bars, percentuais):
-        bar._tooltip_text = (
-            f"{ticker}: {pct:.1f}% (R$ {val:,.2f})"
-            .replace(",", "X").replace(".", ",").replace("X", ".")
-        )
+        bar._tooltip_text = f"{ticker}: {pct:.1f}% ({_format_brl(val)})"
         ax.text(
-            bar.get_width() + max_pct * 0.02,
+            bar.get_width() + max_pct * 0.025,
             bar.get_y() + bar.get_height() / 2.0,
             f"{pct:.1f}%",
             va="center",
             ha="left",
-            color=TEXT_COLOR,
+            color=t["text"],
             fontsize=8,
+            fontweight="bold",
+            fontfamily=FONT_FAMILY,
         )
 
-    ax.set_title("Distribuição por Ativo (%)", color=TEXT_COLOR, fontsize=10, fontweight="bold", pad=8)
-    fig.tight_layout()
+    _aplicar_titulo(ax, "Distribuição por Ativo (%)", t)
+    fig.tight_layout(pad=1.0)
     return fig
 
 
@@ -210,13 +363,20 @@ def create_monthly_dividends_figure(
     mensal_stats: Dict[str, Dict],
     max_months: int = 12,
     figsize: Tuple[float, float] = (8.5, 2.2),
+    theme: str = "dark",
 ) -> Figure:
     """Gera gráfico de barras verticais com a evolução mensal dos proventos em R$."""
-    fig, ax = _criar_figura_base(figsize)
+    fig, ax, t = _criar_figura_base(figsize, theme=theme)
 
     if not mensal_stats:
-        _renderizar_estado_vazio(ax, "Evolução Mensal de Proventos (R$)", "Sem proventos registrados")
-        fig.tight_layout()
+        _renderizar_estado_vazio(
+            ax,
+            "Evolução Mensal de Proventos (R$)",
+            "Sem proventos registrados",
+            t=t,
+            subtitulo="Os recebimentos mensais serão exibidos automaticamente após consulta.",
+        )
+        fig.tight_layout(pad=1.0)
         return fig
 
     # Seleciona os últimos max_months mais recentes e ordena cronologicamente (esq -> dir)
@@ -231,38 +391,78 @@ def create_monthly_dividends_figure(
     totais = [float(st.get("total", 0.0) or 0.0) for _, st in cronologico]
 
     if sum(totais) <= 0:
-        _renderizar_estado_vazio(ax, "Evolução Mensal de Proventos (R$)", "Sem proventos registrados")
-        fig.tight_layout()
+        _renderizar_estado_vazio(
+            ax,
+            "Evolução Mensal de Proventos (R$)",
+            "Sem proventos registrados",
+            t=t,
+            subtitulo="Os recebimentos mensais serão exibidos automaticamente após consulta.",
+        )
+        fig.tight_layout(pad=1.0)
         return fig
 
-    bars = ax.bar(meses, totais, color=ACCENT_GREEN, width=0.55)
+    bars = ax.bar(meses, totais, color=t["green"], width=0.52, alpha=0.92)
     max_val = max(totais) if totais else 1.0
-    ax.set_ylim(0, max_val * 1.25)
-    ax.yaxis.grid(True, linestyle="--", alpha=0.25, color=GRID_COLOR)
-    ax.set_axisbelow(True)
-    ax.tick_params(axis="x", labelsize=8)
+    ax.set_ylim(0, max_val * 1.28)
+    _configurar_grid(ax, "y", t, hide_spines=("left",))
+    ax.tick_params(axis="x", colors=t["text"], labelsize=7.5 if len(meses) > 8 else 8)
 
     for mes, bar, val in zip(meses, bars, totais):
-        bar._tooltip_text = f"{mes}: R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        bar._tooltip_text = f"{mes}: {_format_brl(val)}"
         ax.text(
             bar.get_x() + bar.get_width() / 2.0,
-            bar.get_height() + max_val * 0.03,
-            f"R$ {val:.2f}".replace(".", ","),
+            bar.get_height() + max_val * 0.035,
+            f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
             ha="center",
             va="bottom",
-            color=TEXT_COLOR,
+            color=t["text"],
             fontsize=7.5,
+            fontweight="bold",
+            fontfamily=FONT_FAMILY,
         )
 
-    ax.set_title(
-        "Evolução Mensal de Proventos (R$)",
-        color=TEXT_COLOR,
-        fontsize=10,
-        fontweight="bold",
-        pad=8,
-    )
-    fig.tight_layout()
+    _aplicar_titulo(ax, "Evolução Mensal de Proventos (R$)", t)
+    fig.tight_layout(pad=1.0)
     return fig
+
+
+def _render_diverging_barh(
+    ax,
+    tickers: List[str],
+    values: List[float],
+    tooltips: List[str],
+    titulo: str,
+    t: Dict[str, str],
+) -> None:
+    """Renderiza gráfico de barras horizontais divergentes com rótulos e grid padronizados."""
+    cores = [t["green"] if v >= 0 else t["red"] for v in values]
+    bars = ax.barh(tickers, values, color=cores, height=0.58, alpha=0.94)
+
+    max_abs = max((abs(v) for v in values), default=5.0)
+    pad = max(max_abs * 0.30, 2.5)
+    ax.set_xlim(min(min(values), 0.0) - pad, max(max(values), 0.0) + pad)
+    _configurar_grid(ax, "x", t, zero_line=True, hide_spines=("left", "bottom"))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:+.0f}%"))
+    ax.tick_params(axis="y", colors=t["text"], labelsize=8.5)
+
+    offset = max(max_abs * 0.035, 0.35)
+    for bar, val, tooltip_text in zip(bars, values, tooltips):
+        ha = "left" if val >= 0 else "right"
+        x_pos = bar.get_width() + offset if val >= 0 else bar.get_width() - offset
+        ax.text(
+            x_pos,
+            bar.get_y() + bar.get_height() / 2.0,
+            f"{val:+.1f}%",
+            va="center",
+            ha=ha,
+            color=t["text"],
+            fontsize=8,
+            fontweight="bold",
+            fontfamily=FONT_FAMILY,
+        )
+        bar._tooltip_text = tooltip_text
+
+    _aplicar_titulo(ax, titulo, t)
 
 
 def create_profitability_by_ticker_figure(
@@ -270,9 +470,10 @@ def create_profitability_by_ticker_figure(
     live_quotes: Optional[Dict[str, Dict]] = None,
     top_n: int = 8,
     figsize: Tuple[float, float] = (5.0, 2.5),
+    theme: str = "dark",
 ) -> Figure:
     """Gera gráfico de barras horizontais divergentes com a rentabilidade (%) por ativo."""
-    fig, ax = _criar_figura_base(figsize)
+    fig, ax, t = _criar_figura_base(figsize, theme=theme)
     quotes = live_quotes or {}
     itens: List[Tuple[str, float, float]] = []
 
@@ -292,49 +493,18 @@ def create_profitability_by_ticker_figure(
         itens.append((ticker.strip().upper(), rentab, lucro))
 
     if not itens:
-        _renderizar_estado_vazio(ax, "Rentabilidade por Ativo (%)", "Sem ativos em custódia")
-        fig.tight_layout()
+        _renderizar_estado_vazio(ax, "Rentabilidade por Ativo (%)", "Sem ativos em custódia", t=t)
+        fig.tight_layout(pad=1.0)
         return fig
 
-    # Seleciona os top_n por maior variação absoluta e ordena para exibição
     top_itens = sorted(itens, key=lambda x: abs(x[1]), reverse=True)[:top_n]
     ordenados = sorted(top_itens, key=lambda x: x[1])
-    tickers = [t for t, _, _ in ordenados]
+    tickers = [tk for tk, _, _ in ordenados]
     rentabs = [r for _, r, _ in ordenados]
-    lucros = [l for _, _, l in ordenados]
-    cores = [ACCENT_GREEN if r >= 0 else ACCENT_RED for r in rentabs]
+    tooltips = [f"{tk}: {r:+.2f}% ({_format_brl(l, signed=True)})" for tk, r, l in ordenados]
 
-    bars = ax.barh(tickers, rentabs, color=cores, height=0.6)
-    max_abs = max((abs(r) for r in rentabs), default=5.0)
-    pad = max(max_abs * 0.28, 2.0)
-    min_x = min(min(rentabs), 0.0) - pad
-    max_x = max(max(rentabs), 0.0) + pad
-    ax.set_xlim(min_x, max_x)
-    ax.axvline(0, color=GRID_COLOR, linewidth=1)
-    ax.xaxis.grid(True, linestyle="--", alpha=0.25, color=GRID_COLOR)
-    ax.set_axisbelow(True)
-
-    offset = max(max_abs * 0.03, 0.3)
-    for ticker, bar, r, l in zip(tickers, bars, rentabs, lucros):
-        ha = "left" if r >= 0 else "right"
-        x_pos = bar.get_width() + offset if r >= 0 else bar.get_width() - offset
-        ax.text(
-            x_pos,
-            bar.get_y() + bar.get_height() / 2.0,
-            f"{r:+.1f}%",
-            va="center",
-            ha=ha,
-            color=TEXT_COLOR,
-            fontsize=8,
-        )
-        sinal = "+" if l >= 0 else "-"
-        bar._tooltip_text = (
-            f"{ticker}: {r:+.2f}% ({sinal}R$ {abs(l):,.2f})"
-            .replace(",", "X").replace(".", ",").replace("X", ".")
-        )
-
-    ax.set_title("Rentabilidade por Ativo (%)", color=TEXT_COLOR, fontsize=10, fontweight="bold", pad=8)
-    fig.tight_layout()
+    _render_diverging_barh(ax, tickers, rentabs, tooltips, "Rentabilidade por Ativo (%)", t)
+    fig.tight_layout(pad=1.0)
     return fig
 
 
@@ -342,13 +512,20 @@ def create_sales_darf_summary_figure(
     tax_reports: List,
     max_months: int = 8,
     figsize: Tuple[float, float] = (8.5, 1.8),
+    theme: str = "dark",
 ) -> Figure:
     """Gera gráfico mensal comparando Resultado Líquido (R$) e DARF Apurado (R$)."""
-    fig, ax = _criar_figura_base(figsize)
+    fig, ax, t = _criar_figura_base(figsize, theme=theme)
 
     if not tax_reports:
-        _renderizar_estado_vazio(ax, "Resumo Mensal: Resultado vs. DARF (R$)", "Sem vendas apuradas")
-        fig.tight_layout()
+        _renderizar_estado_vazio(
+            ax,
+            "Resumo Mensal: Resultado vs. DARF (R$)",
+            "Sem vendas apuradas",
+            t=t,
+            subtitulo="Vendas realizadas aparecerão aqui com apuração de DARF.",
+        )
+        fig.tight_layout(pad=1.0)
         return fig
 
     por_mes: Dict[str, Dict[str, float]] = {}
@@ -368,8 +545,14 @@ def create_sales_darf_summary_figure(
         bucket["darf"] += darf
 
     if not por_mes:
-        _renderizar_estado_vazio(ax, "Resumo Mensal: Resultado vs. DARF (R$)", "Sem vendas apuradas")
-        fig.tight_layout()
+        _renderizar_estado_vazio(
+            ax,
+            "Resumo Mensal: Resultado vs. DARF (R$)",
+            "Sem vendas apuradas",
+            t=t,
+            subtitulo="Vendas realizadas aparecerão aqui com apuração de DARF.",
+        )
+        fig.tight_layout(pad=1.0)
         return fig
 
     def _mes_sort_key(mes_str: str) -> Tuple[int, int]:
@@ -384,37 +567,46 @@ def create_sales_darf_summary_figure(
     darfs = [por_mes[m]["darf"] for m in meses_ord]
 
     x_idx = list(range(len(meses_ord)))
-    width = 0.36
+    width = 0.35
     x_res = [x - width / 2 for x in x_idx]
     x_darf = [x + width / 2 for x in x_idx]
-    cores_res = [ACCENT_GREEN if v >= 0 else ACCENT_RED for v in resultados]
+    cores_res = [t["green"] if v >= 0 else t["red"] for v in resultados]
 
-    bars_res = ax.bar(x_res, resultados, width=width, color=cores_res, label="Resultado Líquido")
-    bars_darf = ax.bar(x_darf, darfs, width=width, color=ACCENT_AMBER, label="DARF Devido")
+    bars_res = ax.bar(
+        x_res, resultados, width=width, color=cores_res, alpha=0.94, label="Resultado Líquido"
+    )
+    bars_darf = ax.bar(
+        x_darf, darfs, width=width, color=t["amber"], alpha=0.94, label="DARF Devido"
+    )
 
     for mes, b_res, v_res in zip(meses_ord, bars_res, resultados):
-        b_res._tooltip_text = f"{mes} • Resultado: R$ {v_res:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        b_res._tooltip_text = f"{mes} • Resultado: {_format_brl(v_res, signed=True)}"
     for mes, b_darf, v_darf in zip(meses_ord, bars_darf, darfs):
-        b_darf._tooltip_text = f"{mes} • DARF: R$ {v_darf:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        b_darf._tooltip_text = f"{mes} • DARF: {_format_brl(v_darf)}"
 
-    ax.axhline(0, color=GRID_COLOR, linewidth=1)
-    ax.yaxis.grid(True, linestyle="--", alpha=0.25, color=GRID_COLOR)
-    ax.set_axisbelow(True)
+    todos_vals = resultados + darfs + [0.0]
+    min_y = min(todos_vals)
+    max_y = max(todos_vals)
+    span = max(max_y - min_y, 10.0)
+    ax.set_ylim(min_y - span * 0.14 if min_y < 0 else 0.0, max_y + span * 0.22)
+
+    _configurar_grid(ax, "y", t, zero_line=True, hide_spines=("left",))
     ax.set_xticks(x_idx)
-    ax.set_xticklabels(meses_ord, fontsize=8)
-    ax.legend(loc="upper right", frameon=False, labelcolor=TEXT_COLOR, fontsize=7.5, ncol=2)
-    ax.set_title(
-        "Resumo Mensal: Resultado vs. DARF (R$)",
-        color=TEXT_COLOR,
-        fontsize=10,
-        fontweight="bold",
-        pad=8,
+    ax.set_xticklabels(meses_ord, fontsize=8, color=t["text"])
+    ax.legend(
+        loc="upper right",
+        frameon=False,
+        labelcolor=t["text"],
+        fontsize=7.5,
+        ncol=2,
+        handlelength=1.1,
     )
-    fig.tight_layout()
+    _aplicar_titulo(ax, "Resumo Mensal: Resultado vs. DARF (R$)", t)
+    fig.tight_layout(pad=1.0)
     return fig
 
 
-def attach_matplotlib_tooltip(canvas, figure: Figure):
+def attach_matplotlib_tooltip(canvas, figure: Figure, theme: Optional[str] = None):
     """Conecta tooltip interativo (hover) nos patches visíveis de uma Figure no canvas."""
     from matplotlib.patches import Rectangle, Wedge
 
@@ -422,15 +614,24 @@ def attach_matplotlib_tooltip(canvas, figure: Figure):
     if not axes:
         return None
 
+    t = get_chart_theme(theme) if theme else getattr(figure, "_chart_theme_tokens", CHART_THEMES["dark"])
     ax = axes[0]
     annot = ax.annotate(
         "",
         xy=(0, 0),
-        xytext=(8, 8),
+        xytext=(10, 10),
         textcoords="offset points",
-        bbox=dict(boxstyle="round,pad=0.35", fc="#18181b", ec="#3f3f46", alpha=0.95),
-        color="#ffffff",
+        bbox=dict(
+            boxstyle="round,pad=0.45",
+            fc=t["tooltip_bg"],
+            ec=t["tooltip_border"],
+            lw=1.0,
+            alpha=0.96,
+        ),
+        color=t["tooltip_text"],
         fontsize=8,
+        fontfamily=FONT_FAMILY,
+        zorder=20,
     )
     annot.set_visible(False)
 
@@ -438,11 +639,24 @@ def attach_matplotlib_tooltip(canvas, figure: Figure):
         if isinstance(patch, Rectangle):
             return patch.get_x() + patch.get_width() / 2.0, patch.get_y() + patch.get_height() / 2.0
         if isinstance(patch, Wedge):
-            import math
             ang = math.radians((patch.theta1 + patch.theta2) / 2.0)
             r = patch.r * 0.65
             return patch.center[0] + r * math.cos(ang), patch.center[1] + r * math.sin(ang)
         return 0.0, 0.0
+
+    def _ajustar_posicao_tooltip(target_ax, x: float, y: float) -> None:
+        """Posiciona o tooltip evitando cortes nas bordas do gráfico."""
+        try:
+            disp_x, disp_y = target_ax.transData.transform((x, y))
+            rel_x, rel_y = target_ax.transAxes.inverted().transform((disp_x, disp_y))
+        except Exception:
+            rel_x, rel_y = 0.5, 0.5
+
+        dx = -10 if rel_x > 0.62 else 10
+        dy = -14 if rel_y > 0.72 else 10
+        annot.set_position((dx, dy))
+        annot.set_ha("right" if rel_x > 0.62 else "left")
+        annot.set_va("top" if rel_y > 0.72 else "bottom")
 
     def _on_hover(event):
         if event.inaxes not in axes:
@@ -462,6 +676,7 @@ def attach_matplotlib_tooltip(canvas, figure: Figure):
                         continue
                     x, y = _get_patch_anchor(patch)
                     annot.xy = (x, y)
+                    _ajustar_posicao_tooltip(target_ax, x, y)
                     annot.set_text(texto)
                     annot.set_visible(True)
                     canvas.draw_idle()
@@ -528,14 +743,15 @@ def create_total_return_pct_figure(
     proventos_por_ticker: Optional[Dict[str, float]] = None,
     top_n: int = 8,
     figsize: Tuple[float, float] = (4.8, 2.4),
+    theme: str = "dark",
 ) -> Figure:
     """Gera gráfico de barras horizontais divergentes com o Retorno Total (%) (Cota + Proventos)."""
-    fig, ax = _criar_figura_base(figsize)
+    fig, ax, t = _criar_figura_base(figsize, theme=theme)
     itens = _calcular_retorno_total_ativos(wallet, live_quotes, proventos_por_ticker)
 
     if not itens:
-        _renderizar_estado_vazio(ax, "Retorno Total por Ativo (%)", "Sem ativos em custódia")
-        fig.tight_layout()
+        _renderizar_estado_vazio(ax, "Retorno Total por Ativo (%)", "Sem ativos em custódia", t=t)
+        fig.tight_layout(pad=1.0)
         return fig
 
     top_itens = sorted(itens, key=lambda x: abs(x["total_pct"]), reverse=True)[:top_n]
@@ -543,37 +759,14 @@ def create_total_return_pct_figure(
 
     tickers = [x["ticker"] for x in ordenados]
     totais_pct = [x["total_pct"] for x in ordenados]
-    cores = [ACCENT_GREEN if v >= 0 else ACCENT_RED for v in totais_pct]
+    tooltips = [
+        f"{x['ticker']}: {x['total_pct']:+.2f}% "
+        f"(Cota: {x['cota_pct']:+.2f}% | Prov: +{x['prov_pct']:.2f}%)"
+        for x in ordenados
+    ]
 
-    bars = ax.barh(tickers, totais_pct, color=cores, height=0.6)
-    max_abs = max((abs(v) for v in totais_pct), default=5.0)
-    pad = max(max_abs * 0.28, 2.0)
-    ax.set_xlim(min(min(totais_pct), 0.0) - pad, max(max(totais_pct), 0.0) + pad)
-    ax.axvline(0, color=GRID_COLOR, linewidth=1)
-    ax.xaxis.grid(True, linestyle="--", alpha=0.25, color=GRID_COLOR)
-    ax.set_axisbelow(True)
-
-    offset = max(max_abs * 0.03, 0.3)
-    for item, bar in zip(ordenados, bars):
-        val = item["total_pct"]
-        ha = "left" if val >= 0 else "right"
-        x_pos = bar.get_width() + offset if val >= 0 else bar.get_width() - offset
-        ax.text(
-            x_pos,
-            bar.get_y() + bar.get_height() / 2.0,
-            f"{val:+.1f}%",
-            va="center",
-            ha=ha,
-            color=TEXT_COLOR,
-            fontsize=8,
-        )
-        bar._tooltip_text = (
-            f"{item['ticker']}: {val:+.2f}% "
-            f"(Cota: {item['cota_pct']:+.2f}% | Prov: +{item['prov_pct']:.2f}%)"
-        )
-
-    ax.set_title("Retorno Total por Ativo (%)", color=TEXT_COLOR, fontsize=10, fontweight="bold", pad=8)
-    fig.tight_layout()
+    _render_diverging_barh(ax, tickers, totais_pct, tooltips, "Retorno Total por Ativo (%)", t)
+    fig.tight_layout(pad=1.0)
     return fig
 
 
@@ -583,51 +776,65 @@ def create_total_return_breakdown_figure(
     proventos_por_ticker: Optional[Dict[str, float]] = None,
     top_n: int = 8,
     figsize: Tuple[float, float] = (4.8, 2.4),
+    theme: str = "dark",
 ) -> Figure:
     """Gera gráfico comparando Valorização da Cota (R$) vs. Proventos Recebidos (R$) por ativo."""
-    fig, ax = _criar_figura_base(figsize)
+    fig, ax, t = _criar_figura_base(figsize, theme=theme)
     itens = _calcular_retorno_total_ativos(wallet, live_quotes, proventos_por_ticker)
 
     if not itens:
-        _renderizar_estado_vazio(ax, "Composição: Cota vs. Proventos (R$)", "Sem ativos em custódia")
-        fig.tight_layout()
+        _renderizar_estado_vazio(
+            ax, "Composição: Cota vs. Proventos (R$)", "Sem ativos em custódia", t=t
+        )
+        fig.tight_layout(pad=1.0)
         return fig
 
     top_itens = sorted(itens, key=lambda x: abs(x["retorno_rs"]), reverse=True)[:top_n]
     ordenados = sorted(top_itens, key=lambda x: x["retorno_rs"])
 
     y_idx = list(range(len(ordenados)))
-    height = 0.36
+    height = 0.35
     y_cota = [y - height / 2 for y in y_idx]
     y_prov = [y + height / 2 for y in y_idx]
 
     ganhos_cota = [x["ganho_cota"] for x in ordenados]
     proventos = [x["proventos"] for x in ordenados]
-    cores_cota = ["#3b82f6" if v >= 0 else ACCENT_RED for v in ganhos_cota]
+    cores_cota = [t["blue"] if v >= 0 else t["red"] for v in ganhos_cota]
 
-    bars_cota = ax.barh(y_cota, ganhos_cota, height=height, color=cores_cota, label="Valorização")
-    bars_prov = ax.barh(y_prov, proventos, height=height, color=ACCENT_GREEN, label="Proventos")
+    bars_cota = ax.barh(
+        y_cota, ganhos_cota, height=height, color=cores_cota, alpha=0.94, label="Valorização"
+    )
+    bars_prov = ax.barh(
+        y_prov, proventos, height=height, color=t["green"], alpha=0.94, label="Proventos"
+    )
 
     for item, b_cota in zip(ordenados, bars_cota):
         v = item["ganho_cota"]
-        sinal = "+" if v >= 0 else "-"
         b_cota._tooltip_text = (
-            f"{item['ticker']} • Cota: {sinal}R$ {abs(v):,.2f} ({item['cota_pct']:+.2f}%)"
-            .replace(",", "X").replace(".", ",").replace("X", ".")
+            f"{item['ticker']} • Cota: {_format_brl(v, signed=True)} ({item['cota_pct']:+.2f}%)"
         )
     for item, b_prov in zip(ordenados, bars_prov):
         v = item["proventos"]
         b_prov._tooltip_text = (
-            f"{item['ticker']} • Proventos: +R$ {v:,.2f} ({item['prov_pct']:.2f}%)"
-            .replace(",", "X").replace(".", ",").replace("X", ".")
+            f"{item['ticker']} • Proventos: {_format_brl(v, signed=True)} ({item['prov_pct']:.2f}%)"
         )
 
-    ax.axvline(0, color=GRID_COLOR, linewidth=1)
-    ax.xaxis.grid(True, linestyle="--", alpha=0.25, color=GRID_COLOR)
-    ax.set_axisbelow(True)
+    todos_vals = ganhos_cota + proventos + [0.0]
+    min_x = min(todos_vals)
+    max_x = max(todos_vals)
+    span = max(max_x - min_x, 10.0)
+    ax.set_xlim(min_x - span * 0.14 if min_x < 0 else 0.0, max_x + span * 0.14)
+
+    _configurar_grid(ax, "x", t, zero_line=True, hide_spines=("left", "bottom"))
     ax.set_yticks(y_idx)
-    ax.set_yticklabels([x["ticker"] for x in ordenados], fontsize=8)
-    ax.legend(loc="lower right", frameon=False, labelcolor=TEXT_COLOR, fontsize=7.5)
-    ax.set_title("Composição: Cota vs. Proventos (R$)", color=TEXT_COLOR, fontsize=10, fontweight="bold", pad=8)
-    fig.tight_layout()
+    ax.set_yticklabels([x["ticker"] for x in ordenados], fontsize=8.5, color=t["text"])
+    ax.legend(
+        loc="lower right",
+        frameon=False,
+        labelcolor=t["text"],
+        fontsize=7.5,
+        handlelength=1.1,
+    )
+    _aplicar_titulo(ax, "Composição: Cota vs. Proventos (R$)", t)
+    fig.tight_layout(pad=1.0)
     return fig

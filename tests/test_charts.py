@@ -273,3 +273,50 @@ def test_create_total_return_breakdown_figure_com_dados_e_vazio():
     fig_vazio = create_total_return_breakdown_figure({})
     ax_vazio = fig_vazio.axes[0]
     assert any("Sem ativos em custódia" in t.get_text() for t in ax_vazio.texts)
+
+
+def test_chart_themes_dark_and_light():
+    from matplotlib.colors import to_hex
+    from invest_ai.ui.charts import get_chart_theme, BG_COLOR
+
+    dark = get_chart_theme("dark")
+    light = get_chart_theme("light")
+    assert dark["bg"] == BG_COLOR == "#1e293b"
+    assert light["bg"] == "#ffffff"
+
+    wallet = {"MXRF11": {"quantidade": 10.0, "total_investido": 100.0, "tipo_ativo": "fii"}}
+    fig_dark = create_allocation_by_class_figure(wallet, theme="dark")
+    fig_light = create_allocation_by_class_figure(wallet, theme="light")
+
+    assert to_hex(fig_dark.get_facecolor()) == "#1e293b"
+    assert to_hex(fig_light.get_facecolor()) == "#ffffff"
+    assert any("100,00" in t.get_text() for t in fig_dark.axes[0].texts)
+
+
+def test_attach_matplotlib_tooltip_hover_updates_visibility():
+    from unittest.mock import MagicMock
+
+    wallet = {"MXRF11": {"quantidade": 10.0, "total_investido": 100.0, "tipo_ativo": "fii"}}
+    fig = create_allocation_by_ticker_figure(wallet, theme="light")
+    canvas = MagicMock()
+    callbacks = {}
+
+    def fake_connect(event_name, cb):
+        callbacks[event_name] = cb
+        return 7
+
+    canvas.mpl_connect.side_effect = fake_connect
+    cid = attach_matplotlib_tooltip(canvas, fig)
+    assert cid == 7
+    assert "motion_notify_event" in callbacks
+
+    ax = fig.axes[0]
+    bar = ax.patches[0]
+    event = MagicMock()
+    event.inaxes = ax
+    # Simula cursor fora da barra (axes diferente) -> não falha e mantém oculto
+    event.inaxes = None
+    callbacks["motion_notify_event"](event)
+    assert hasattr(bar, "_tooltip_text")
+    assert "MXRF11" in bar._tooltip_text
+
