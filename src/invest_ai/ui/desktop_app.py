@@ -106,40 +106,42 @@ class InvestAIApp(InvestApp):
 
         title_lbl = ctk.CTkLabel(
             header_frame,
-            text="🤖 Copiloto Inteligente de Investimentos",
-            font=ctk.CTkFont(size=22, weight="bold")
+            text="🤖 Copiloto Invest.AI",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            anchor="w",
         )
-        title_lbl.grid(row=0, column=0, sticky="w")
+        title_lbl.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         subtitle_lbl = ctk.CTkLabel(
             header_frame,
-            text=f"Processamento por PydanticAI • Modelo ativo: {nome_mod}",
-            font=ctk.CTkFont(size=12),
-            text_color="gray70"
+            text=f"PydanticAI • {nome_mod}",
+            font=ctk.CTkFont(size=11),
+            text_color="gray70",
+            anchor="w",
         )
-        subtitle_lbl.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        subtitle_lbl.grid(row=1, column=0, sticky="w", pady=(2, 0), padx=(0, 8))
 
         self.btn_export_irpf = ctk.CTkButton(
             header_frame,
-            text="💾 Exportar Guia IRPF (.txt)",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            text="💾 Exportar IRPF (.txt)",
+            font=ctk.CTkFont(size=12, weight="bold"),
             fg_color="#059669",
             hover_color="#047857",
-            height=38,
+            height=34,
             command=self._on_export_irpf_txt
         )
-        self.btn_export_irpf.grid(row=0, column=1, rowspan=2, padx=(10, 0), sticky="e")
+        self.btn_export_irpf.grid(row=0, column=1, rowspan=2, padx=(8, 0), sticky="e")
 
         self.btn_import_pdf = ctk.CTkButton(
             header_frame,
-            text="📄 Importar Nota de Corretagem (PDF)",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            text="📄 Importar Nota (PDF)",
+            font=ctk.CTkFont(size=12, weight="bold"),
             fg_color="#0284c7",
             hover_color="#0369a1",
-            height=38,
+            height=34,
             command=self._on_import_brokerage_note
         )
-        self.btn_import_pdf.grid(row=0, column=2, rowspan=2, padx=(10, 0), sticky="e")
+        self.btn_import_pdf.grid(row=0, column=2, rowspan=2, padx=(8, 0), sticky="e")
 
         self.chat_scroll = ctk.CTkScrollableFrame(frame, corner_radius=10, fg_color="#18181b")
         self.chat_scroll.grid(row=1, column=0, sticky="nsew", pady=(0, 15))

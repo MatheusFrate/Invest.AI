@@ -311,52 +311,44 @@ class InvestApp(ctk.CTk):
         frame.grid_rowconfigure(3, weight=0)
         frame.grid_rowconfigure(4, weight=1)
 
-        # Cabeçalho com Título, Seletor de Gráfico e Botão de Atualizar Cotações B3
+        # Cabeçalho com Título, Toggle de Gráficos e Botão de Atualizar B3
         header_frame = ctk.CTkFrame(frame, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         header_frame.grid_columnconfigure(0, weight=1)
 
         title = ctk.CTkLabel(
-            header_frame, text="Carteira Atual (Posição em Aberto & Cotação B3)", 
-            font=ctk.CTkFont(size=20, weight="bold")
-        )
-        title.grid(row=0, column=0, sticky="w")
-
-        self.seg_carteira_chart_mode = ctk.CTkSegmentedButton(
             header_frame,
-            values=["Alocação", "Rentabilidade"],
-            command=self._on_carteira_chart_mode_changed,
-            height=34,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            text="Carteira Atual",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            anchor="w",
         )
-        self.seg_carteira_chart_mode.set("Alocação")
-        self.seg_carteira_chart_mode.grid(row=0, column=1, sticky="e", padx=(0, 8))
+        title.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         self.btn_toggle_charts = ctk.CTkButton(
             header_frame, text="📊 Ocultar Gráficos",
             command=self._toggle_carteira_charts,
-            height=34, font=ctk.CTkFont(size=13, weight="bold"),
+            height=32, font=ctk.CTkFont(size=12, weight="bold"),
             fg_color="#374151", hover_color="#4b5563"
         )
-        self.btn_toggle_charts.grid(row=0, column=2, sticky="e", padx=(0, 8))
+        self.btn_toggle_charts.grid(row=0, column=1, sticky="e", padx=(0, 8))
 
         self.btn_refresh_quotes = ctk.CTkButton(
-            header_frame, text="📡 Atualizar Cotações B3", 
+            header_frame, text="📡 Atualizar B3",
             command=self.refresh_quotes_async,
-            height=34, font=ctk.CTkFont(size=13, weight="bold"),
+            height=32, font=ctk.CTkFont(size=12, weight="bold"),
             fg_color="#1f538d", hover_color="#14375e"
         )
-        self.btn_refresh_quotes.grid(row=0, column=3, sticky="e")
+        self.btn_refresh_quotes.grid(row=0, column=2, sticky="e")
 
-        # Cards de Resumo Expandidos (Total Investido, Patrimônio Atual, Lucro/Prejuízo Total, Prejuízo a Compensar)
+        # Cards de Resumo Expandidos (Total Investido, Patrimônio Atual, Lucro/Prejuízo, Prejuízo Acum. IR)
         cards_frame = ctk.CTkFrame(frame)
         cards_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
         cards_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         self.card_total_investido = self._create_stat_card(cards_frame, 0, "Total Investido", "R$ 0,00", "#1f538d")
-        self.card_patrimonio_atual = self._create_stat_card(cards_frame, 1, "Patrimônio Atual (B3)", "R$ 0,00", "#145214")
-        self.card_lucro_total = self._create_stat_card(cards_frame, 2, "Lucro / Prejuízo Total", "R$ 0,00", "#2d4a22")
-        self.card_prejuizo_acum = self._create_stat_card(cards_frame, 3, "Prejuízo a Compensar (IR)", "R$ 0,00", "#b35900")
+        self.card_patrimonio_atual = self._create_stat_card(cards_frame, 1, "Patrimônio Atual", "R$ 0,00", "#145214")
+        self.card_lucro_total = self._create_stat_card(cards_frame, 2, "Lucro / Prejuízo", "R$ 0,00", "#2d4a22")
+        self.card_prejuizo_acum = self._create_stat_card(cards_frame, 3, "Prejuízo Acum. (IR)", "R$ 0,00", "#b35900")
 
         # Gráficos da Carteira (Rosca por Classe + Barras por Ativo / Rentabilidade)
         self.carteira_charts_frame = ctk.CTkFrame(frame, height=230)
@@ -375,13 +367,13 @@ class InvestApp(ctk.CTk):
         )
         self.chart_ticker_container.grid(row=0, column=1, sticky="nsew", padx=(4, 6), pady=6)
 
-        # Barra de Filtro Rápido por Classe de Ativo
+        # Barra de Filtro Rápido por Classe de Ativo e Seletor de Gráfico
         filter_bar = ctk.CTkFrame(frame, fg_color="transparent")
         filter_bar.grid(row=3, column=0, sticky="ew", pady=(0, 6))
         filter_bar.grid_columnconfigure(1, weight=1)
 
-        lbl_filtro_c = ctk.CTkLabel(filter_bar, text="Filtrar classe:", font=ctk.CTkFont(size=12, weight="bold"))
-        lbl_filtro_c.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        lbl_filtro_c = ctk.CTkLabel(filter_bar, text="Classe:", font=ctk.CTkFont(size=12, weight="bold"))
+        lbl_filtro_c.grid(row=0, column=0, sticky="w", padx=(0, 6))
 
         self.seg_filtro_carteira_tipo = ctk.CTkSegmentedButton(
             filter_bar,
@@ -393,13 +385,18 @@ class InvestApp(ctk.CTk):
         self.seg_filtro_carteira_tipo.set("Todos")
         self.seg_filtro_carteira_tipo.grid(row=0, column=1, sticky="w")
 
-        lbl_dica_c = ctk.CTkLabel(
+        lbl_modo_g = ctk.CTkLabel(filter_bar, text="Gráfico:", font=ctk.CTkFont(size=12, weight="bold"))
+        lbl_modo_g.grid(row=0, column=2, sticky="e", padx=(8, 6))
+
+        self.seg_carteira_chart_mode = ctk.CTkSegmentedButton(
             filter_bar,
-            text="💡 Clique no cabeçalho para ordenar • Botão direito para copiar",
-            text_color="gray70",
-            font=ctk.CTkFont(size=11),
+            values=["Alocação", "Rentabilidade"],
+            command=self._on_carteira_chart_mode_changed,
+            height=28,
+            font=ctk.CTkFont(size=12),
         )
-        lbl_dica_c.grid(row=0, column=2, sticky="e")
+        self.seg_carteira_chart_mode.set("Alocação")
+        self.seg_carteira_chart_mode.grid(row=0, column=3, sticky="e")
 
         tbl_container = ctk.CTkFrame(frame)
         tbl_container.grid(row=4, column=0, sticky="nsew")
@@ -452,11 +449,28 @@ class InvestApp(ctk.CTk):
         frame.grid_rowconfigure(4, weight=1)
         frame.grid_rowconfigure(6, weight=2)
 
+        header_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        header_frame.grid_columnconfigure(0, weight=1)
+
         title = ctk.CTkLabel(
-            frame, text="Apuração de Vendas & Cálculo de DARF", 
-            font=ctk.CTkFont(size=20, weight="bold")
+            header_frame,
+            text="Apuração de Vendas & DARF",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            anchor="w",
         )
-        title.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        title.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        self.btn_toggle_vendas_chart = ctk.CTkButton(
+            header_frame,
+            text="📊 Mostrar Gráfico",
+            command=self._toggle_vendas_chart,
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#374151",
+            hover_color="#4b5563",
+        )
+        self.btn_toggle_vendas_chart.grid(row=0, column=1, sticky="e")
 
         info_frame = ctk.CTkFrame(frame, fg_color="#1c2430", corner_radius=8)
         info_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12), padx=2)
@@ -468,13 +482,18 @@ class InvestApp(ctk.CTk):
         )
         info_lbl.pack(padx=15, pady=10, anchor="w")
 
-        # Subcabeçalho com Título, Filtro de Ano, Botão de Gráfico e Botão de Marcar DARF Pago
+        # Subcabeçalho com Título, Filtro de Ano e Botão de Marcar DARF Pago
         sub1_box = ctk.CTkFrame(frame, fg_color="transparent")
         sub1_box.grid(row=2, column=0, sticky="ew", pady=(5, 5))
         sub1_box.grid_columnconfigure(0, weight=1)
 
-        lbl_sub1 = ctk.CTkLabel(sub1_box, text="📅 Resumo Fiscal por Período / Mês", font=ctk.CTkFont(size=15, weight="bold"))
-        lbl_sub1.grid(row=0, column=0, sticky="w")
+        lbl_sub1 = ctk.CTkLabel(
+            sub1_box,
+            text="📅 Resumo Fiscal por Mês",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            anchor="w",
+        )
+        lbl_sub1.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         lbl_ano_v = ctk.CTkLabel(sub1_box, text="Ano:", font=ctk.CTkFont(size=12, weight="bold"))
         lbl_ano_v.grid(row=0, column=1, sticky="e", padx=(0, 6))
@@ -483,30 +502,19 @@ class InvestApp(ctk.CTk):
             sub1_box,
             values=["Todos"],
             command=self._on_vendas_ano_filter_changed,
-            width=105,
-            height=32,
+            width=100,
+            height=30,
         )
         self.opt_filtro_vendas_ano.set("Todos")
         self.opt_filtro_vendas_ano.grid(row=0, column=2, sticky="e", padx=(0, 8))
 
-        self.btn_toggle_vendas_chart = ctk.CTkButton(
-            sub1_box,
-            text="📊 Mostrar Gráfico",
-            command=self._toggle_vendas_chart,
-            height=32,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color="#374151",
-            hover_color="#4b5563",
-        )
-        self.btn_toggle_vendas_chart.grid(row=0, column=3, sticky="e", padx=(0, 8))
-
         btn_pagar_darf = ctk.CTkButton(
-            sub1_box, text="🧾 Marcar DARF como Pago", 
+            sub1_box, text="🧾 Marcar DARF Pago",
             command=self.mark_darf_as_paid,
-            height=32, font=ctk.CTkFont(size=13, weight="bold"),
+            height=30, font=ctk.CTkFont(size=12, weight="bold"),
             fg_color="#1f7a1f", hover_color="#145214"
         )
-        btn_pagar_darf.grid(row=0, column=4, sticky="e")
+        btn_pagar_darf.grid(row=0, column=3, sticky="e")
 
         # Gráfico Opcional de Resultado vs. DARF (oculto por padrão para preservar espaço vertical)
         self.vendas_chart_frame = ctk.CTkFrame(
@@ -575,46 +583,35 @@ class InvestApp(ctk.CTk):
         frame.grid_rowconfigure(4, weight=1)
         frame.grid_rowconfigure(6, weight=2)
 
-        # Cabeçalho com Título, Filtro de Ano e Botão de Consulta de Proventos
+        # Cabeçalho com Título e Botão de Consulta de Proventos
         header_frame = ctk.CTkFrame(frame, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         header_frame.grid_columnconfigure(0, weight=1)
 
         title = ctk.CTkLabel(
-            header_frame, text="Proventos & Rendimentos (Dividendos Recebidos)", 
-            font=ctk.CTkFont(size=20, weight="bold")
-        )
-        title.grid(row=0, column=0, sticky="w")
-
-        lbl_ano_p = ctk.CTkLabel(header_frame, text="Ano:", font=ctk.CTkFont(size=12, weight="bold"))
-        lbl_ano_p.grid(row=0, column=1, sticky="e", padx=(0, 6))
-
-        self.opt_filtro_proventos_ano = ctk.CTkOptionMenu(
             header_frame,
-            values=["Todos"],
-            command=self._on_proventos_ano_filter_changed,
-            width=105,
-            height=34,
+            text="Proventos & Dividendos",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            anchor="w",
         )
-        self.opt_filtro_proventos_ano.set("Todos")
-        self.opt_filtro_proventos_ano.grid(row=0, column=2, sticky="e", padx=(0, 8))
+        title.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         self.btn_refresh_divs = ctk.CTkButton(
-            header_frame, text="📡 Buscar Histórico de Proventos", 
+            header_frame, text="📡 Atualizar Proventos",
             command=self.refresh_dividends_async,
-            height=34, font=ctk.CTkFont(size=13, weight="bold"),
+            height=32, font=ctk.CTkFont(size=12, weight="bold"),
             fg_color="#145214", hover_color="#0e3a0e"
         )
-        self.btn_refresh_divs.grid(row=0, column=3, sticky="e")
+        self.btn_refresh_divs.grid(row=0, column=1, sticky="e")
 
         # Cards de Resumo de Proventos
         cards_frame = ctk.CTkFrame(frame)
         cards_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
         cards_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
-        self.card_total_proventos = self._create_stat_card(cards_frame, 0, "Total de Proventos Estimados (12M)", "R$ 0,00", "#145214")
-        self.card_media_mensal = self._create_stat_card(cards_frame, 1, "Média Mensal Estimada", "R$ 0,00", "#1f538d")
-        self.card_yield_medio = self._create_stat_card(cards_frame, 2, "Dividend Yield Anual (Yield on Cost)", "0.00%", "#b35900")
+        self.card_total_proventos = self._create_stat_card(cards_frame, 0, "Total Recebido (Histórico)", "R$ 0,00", "#145214")
+        self.card_media_mensal = self._create_stat_card(cards_frame, 1, "Média Mensal (12M)", "R$ 0,00", "#1f538d")
+        self.card_yield_medio = self._create_stat_card(cards_frame, 2, "Yield on Cost (12M)", "0.00%", "#b35900")
 
         # Gráfico de Evolução Mensal de Proventos
         self.proventos_chart_frame = ctk.CTkFrame(
@@ -623,9 +620,31 @@ class InvestApp(ctk.CTk):
         self.proventos_chart_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         self.proventos_chart_frame.grid_propagate(False)
 
-        # Tabela 1: Resumo Mensal de Proventos
-        lbl_sub1 = ctk.CTkLabel(frame, text="📅 Rendimentos Recebidos por Mês", font=ctk.CTkFont(size=15, weight="bold"))
-        lbl_sub1.grid(row=3, column=0, sticky="w", pady=(5, 5))
+        # Tabela 1: Resumo Mensal de Proventos + Filtro por Ano
+        sub1_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        sub1_frame.grid(row=3, column=0, sticky="ew", pady=(5, 5))
+        sub1_frame.grid_columnconfigure(0, weight=1)
+
+        lbl_sub1 = ctk.CTkLabel(
+            sub1_frame,
+            text="📅 Rendimentos Recebidos por Mês",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            anchor="w",
+        )
+        lbl_sub1.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        lbl_ano_p = ctk.CTkLabel(sub1_frame, text="Ano:", font=ctk.CTkFont(size=12, weight="bold"))
+        lbl_ano_p.grid(row=0, column=1, sticky="e", padx=(0, 6))
+
+        self.opt_filtro_proventos_ano = ctk.CTkOptionMenu(
+            sub1_frame,
+            values=["Todos"],
+            command=self._on_proventos_ano_filter_changed,
+            width=100,
+            height=28,
+        )
+        self.opt_filtro_proventos_ano.set("Todos")
+        self.opt_filtro_proventos_ano.grid(row=0, column=2, sticky="e")
 
         tbl_month_container = ctk.CTkFrame(frame, height=130)
         tbl_month_container.grid(row=4, column=0, sticky="nsew", pady=(0, 12))
@@ -937,13 +956,27 @@ class InvestApp(ctk.CTk):
     # -------------------------------------------------------------
     def _create_stat_card(self, parent, col, title, initial_val, color):
         card = ctk.CTkFrame(parent, fg_color=color, corner_radius=10)
-        card.grid(row=0, column=col, padx=8, pady=8, sticky="ew")
+        card.grid(row=0, column=col, padx=5, pady=6, sticky="ew")
 
-        lbl_title = ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=12, weight="normal"), text_color="white")
-        lbl_title.pack(padx=15, pady=(10, 2), anchor="w")
+        lbl_title = ctk.CTkLabel(
+            card,
+            text=title,
+            font=ctk.CTkFont(size=11, weight="normal"),
+            text_color="white",
+            anchor="w",
+            justify="left",
+        )
+        lbl_title.pack(padx=10, pady=(8, 2), fill="x", anchor="w")
 
-        lbl_val = ctk.CTkLabel(card, text=initial_val, font=ctk.CTkFont(size=20, weight="bold"), text_color="white")
-        lbl_val.pack(padx=15, pady=(0, 10), anchor="w")
+        lbl_val = ctk.CTkLabel(
+            card,
+            text=initial_val,
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="white",
+            anchor="w",
+            justify="left",
+        )
+        lbl_val.pack(padx=10, pady=(0, 8), fill="x", anchor="w")
 
         return lbl_val
 
@@ -1248,7 +1281,7 @@ class InvestApp(ctk.CTk):
 
     def _on_quotes_fetched(self):
         self.is_fetching_quotes = False
-        self.btn_refresh_quotes.configure(text="📡 Atualizar Cotações B3", state="normal")
+        self.btn_refresh_quotes.configure(text="📡 Atualizar B3", state="normal")
         self._update_sync_status_label()
         self.load_data()
 
@@ -1273,7 +1306,7 @@ class InvestApp(ctk.CTk):
 
     def _on_dividends_fetched(self):
         self.is_fetching_dividends = False
-        self.btn_refresh_divs.configure(text="📡 Buscar Histórico de Proventos", state="normal")
+        self.btn_refresh_divs.configure(text="📡 Atualizar Proventos", state="normal")
         self._update_sync_status_label()
         self._update_dividends_view()
 
