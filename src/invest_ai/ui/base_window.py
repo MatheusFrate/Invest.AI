@@ -9,10 +9,17 @@ from tkinter import ttk, messagebox
 import customtkinter as ctk
 from datetime import datetime
 import threading
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from invest_ai.core.engine import InvestmentEngine, Transaction
 from invest_ai.services.quotes_service import fetch_all_quotes
 from invest_ai.services.dividends_service import fetch_all_dividends, calculate_historical_dividends
+from invest_ai.ui.charts import (
+    create_allocation_by_class_figure,
+    create_allocation_by_ticker_figure,
+    create_monthly_dividends_figure,
+)
 from invest_ai.services.excel_handler import (
     load_transactions_from_excel, 
     save_transaction_to_excel, 
@@ -42,6 +49,9 @@ class InvestApp(ctk.CTk):
         self.is_fetching_quotes = False
         self.dividends_data = {}  # Cache de proventos B3 {ticker: [{...}, ...]}
         self.is_fetching_dividends = False
+        self.charts_visible = True
+        self._chart_figures = {}
+        self._last_wallet = {}
 
         # Variáveis de filtro e ordenação do extrato
         self.historico_sort_col = "id"
@@ -149,7 +159,8 @@ class InvestApp(ctk.CTk):
     def _create_carteira_view(self):
         frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(2, weight=1)
+        frame.grid_rowconfigure(2, weight=0)
+        frame.grid_rowconfigure(3, weight=1)
 
         # Cabeçalho com Título e Botão de Atualizar Cotações B3
         header_frame = ctk.CTkFrame(frame, fg_color="transparent")
@@ -162,17 +173,25 @@ class InvestApp(ctk.CTk):
         )
         title.grid(row=0, column=0, sticky="w")
 
+        self.btn_toggle_charts = ctk.CTkButton(
+            header_frame, text="📊 Ocultar Gráficos",
+            command=self._toggle_carteira_charts,
+            height=34, font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#374151", hover_color="#4b5563"
+        )
+        self.btn_toggle_charts.grid(row=0, column=1, sticky="e", padx=(0, 8))
+
         self.btn_refresh_quotes = ctk.CTkButton(
             header_frame, text="📡 Atualizar Cotações B3", 
             command=self.refresh_quotes_async,
             height=34, font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#1f538d", hover_color="#14375e"
         )
-        self.btn_refresh_quotes.grid(row=0, column=1, sticky="e")
+        self.btn_refresh_quotes.grid(row=0, column=2, sticky="e")
 
         # Cards de Resumo Expandidos (Total Investido, Patrimônio Atual, Lucro/Prejuízo Total, Prejuízo a Compensar)
         cards_frame = ctk.CTkFrame(frame)
-        cards_frame.grid(row=1, column=0, sticky="ew", pady=(0, 15))
+        cards_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
         cards_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         self.card_total_investido = self._create_stat_card(cards_frame, 0, "Total Investido", "R$ 0,00", "#1f538d")
@@ -180,8 +199,25 @@ class InvestApp(ctk.CTk):
         self.card_lucro_total = self._create_stat_card(cards_frame, 2, "Lucro / Prejuízo Total", "R$ 0,00", "#2d4a22")
         self.card_prejuizo_acum = self._create_stat_card(cards_frame, 3, "Prejuízo a Compensar (IR)", "R$ 0,00", "#b35900")
 
+        # Gráficos da Carteira (Rosca por Classe + Barras por Ativo)
+        self.carteira_charts_frame = ctk.CTkFrame(frame, height=230)
+        self.carteira_charts_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        self.carteira_charts_frame.grid_propagate(False)
+        self.carteira_charts_frame.grid_columnconfigure((0, 1), weight=1)
+        self.carteira_charts_frame.grid_rowconfigure(0, weight=1)
+
+        self.chart_class_container = ctk.CTkFrame(
+            self.carteira_charts_frame, fg_color="#2b2b2b", corner_radius=8
+        )
+        self.chart_class_container.grid(row=0, column=0, sticky="nsew", padx=(6, 4), pady=6)
+
+        self.chart_ticker_container = ctk.CTkFrame(
+            self.carteira_charts_frame, fg_color="#2b2b2b", corner_radius=8
+        )
+        self.chart_ticker_container.grid(row=0, column=1, sticky="nsew", padx=(4, 6), pady=6)
+
         tbl_container = ctk.CTkFrame(frame)
-        tbl_container.grid(row=2, column=0, sticky="nsew")
+        tbl_container.grid(row=3, column=0, sticky="nsew")
         tbl_container.grid_rowconfigure(0, weight=1)
         tbl_container.grid_columnconfigure(0, weight=1)
 
@@ -312,7 +348,9 @@ class InvestApp(ctk.CTk):
     def _create_proventos_view(self):
         frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(3, weight=1)
+        frame.grid_rowconfigure(2, weight=0)
+        frame.grid_rowconfigure(4, weight=1)
+        frame.grid_rowconfigure(6, weight=1)
 
         # Cabeçalho com Título e Botão de Consulta de Proventos
         header_frame = ctk.CTkFrame(frame, fg_color="transparent")
@@ -335,19 +373,26 @@ class InvestApp(ctk.CTk):
 
         # Cards de Resumo de Proventos
         cards_frame = ctk.CTkFrame(frame)
-        cards_frame.grid(row=1, column=0, sticky="ew", pady=(0, 15))
+        cards_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
         cards_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
         self.card_total_proventos = self._create_stat_card(cards_frame, 0, "Total de Proventos Estimados (12M)", "R$ 0,00", "#145214")
         self.card_media_mensal = self._create_stat_card(cards_frame, 1, "Média Mensal Estimada", "R$ 0,00", "#1f538d")
         self.card_yield_medio = self._create_stat_card(cards_frame, 2, "Dividend Yield Anual (Yield on Cost)", "0.00%", "#b35900")
 
+        # Gráfico de Evolução Mensal de Proventos
+        self.proventos_chart_frame = ctk.CTkFrame(
+            frame, height=200, fg_color="#2b2b2b", corner_radius=8
+        )
+        self.proventos_chart_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        self.proventos_chart_frame.grid_propagate(False)
+
         # Tabela 1: Resumo Mensal de Proventos
         lbl_sub1 = ctk.CTkLabel(frame, text="📅 Rendimentos Recebidos por Mês", font=ctk.CTkFont(size=15, weight="bold"))
-        lbl_sub1.grid(row=2, column=0, sticky="w", pady=(5, 5))
+        lbl_sub1.grid(row=3, column=0, sticky="w", pady=(5, 5))
 
         tbl_month_container = ctk.CTkFrame(frame, height=130)
-        tbl_month_container.grid(row=3, column=0, sticky="nsew", pady=(0, 15))
+        tbl_month_container.grid(row=4, column=0, sticky="nsew", pady=(0, 12))
         tbl_month_container.grid_rowconfigure(0, weight=1)
         tbl_month_container.grid_columnconfigure(0, weight=1)
 
@@ -367,10 +412,10 @@ class InvestApp(ctk.CTk):
 
         # Tabela 2: Detalhamento por Ativo / Pagamento
         lbl_sub2 = ctk.CTkLabel(frame, text="🧾 Detalhamento por Ativo e Pagamento Oficial", font=ctk.CTkFont(size=15, weight="bold"))
-        lbl_sub2.grid(row=4, column=0, sticky="w", pady=(5, 5))
+        lbl_sub2.grid(row=5, column=0, sticky="w", pady=(5, 5))
 
-        tbl_divs_container = ctk.CTkFrame(frame, height=180)
-        tbl_divs_container.grid(row=5, column=0, sticky="nsew")
+        tbl_divs_container = ctk.CTkFrame(frame, height=160)
+        tbl_divs_container.grid(row=6, column=0, sticky="nsew")
         tbl_divs_container.grid_rowconfigure(0, weight=1)
         tbl_divs_container.grid_columnconfigure(0, weight=1)
 
@@ -393,6 +438,7 @@ class InvestApp(ctk.CTk):
         self.tree_proventos_detalhe.grid(row=0, column=0, sticky="nsew")
         scrollbar_d.grid(row=0, column=1, sticky="ns")
 
+        self._render_proventos_chart({})
         return frame
 
     # -------------------------------------------------------------
@@ -726,6 +772,10 @@ class InvestApp(ctk.CTk):
             text=f"{'+' if lucro_total_carteira >= 0 else '-'}R$ {abs(lucro_total_carteira):,.2f} ({rentab_total_carteira:+.2f}%)".replace(",", "X").replace(".", ",").replace("X", ".")
         )
 
+        self._last_wallet = res['wallet']
+        if self.charts_visible:
+            self._render_carteira_charts(res['wallet'], self.live_quotes)
+
         # 2. Resumo DARF (com controle de DARFs pagos)
         for item in self.tree_darf.get_children():
             self.tree_darf.delete(item)
@@ -897,6 +947,46 @@ class InvestApp(ctk.CTk):
         self.card_total_proventos.configure(text=f"R$ {total_historico_recebido:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         self.card_media_mensal.configure(text=f"R$ {media_mensal:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         self.card_yield_medio.configure(text=f"{yield_anual:.2f}% a.a.")
+        self._render_proventos_chart(mensal_stats)
+
+    def _render_figure_in_container(self, container, figure, slot_key: str):
+        """Renderiza uma Figure Matplotlib em um container CTkFrame fechando a figura anterior."""
+        prev_fig = self._chart_figures.pop(slot_key, None)
+        if prev_fig is not None:
+            plt.close(prev_fig)
+
+        for child in container.winfo_children():
+            child.destroy()
+
+        canvas = FigureCanvasTkAgg(figure, master=container)
+        canvas.draw()
+        widget = canvas.get_tk_widget()
+        widget.pack(fill="both", expand=True, padx=4, pady=4)
+        self._chart_figures[slot_key] = figure
+
+    def _toggle_carteira_charts(self):
+        """Alterna a exibição do painel de gráficos da Carteira Atual."""
+        self.charts_visible = not self.charts_visible
+        if self.charts_visible:
+            self.carteira_charts_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+            self.btn_toggle_charts.configure(text="📊 Ocultar Gráficos")
+            self._render_carteira_charts(self._last_wallet, self.live_quotes)
+        else:
+            self.carteira_charts_frame.grid_forget()
+            self.btn_toggle_charts.configure(text="📊 Mostrar Gráficos")
+
+    def _render_carteira_charts(self, wallet: dict, live_quotes: dict):
+        """Atualiza os gráficos de alocação por classe e distribuição por ativo."""
+        fig_class = create_allocation_by_class_figure(wallet, live_quotes)
+        self._render_figure_in_container(self.chart_class_container, fig_class, "carteira_class")
+
+        fig_ticker = create_allocation_by_ticker_figure(wallet, live_quotes)
+        self._render_figure_in_container(self.chart_ticker_container, fig_ticker, "carteira_ticker")
+
+    def _render_proventos_chart(self, mensal_stats: dict):
+        """Atualiza o gráfico de evolução mensal de proventos."""
+        fig_divs = create_monthly_dividends_figure(mensal_stats)
+        self._render_figure_in_container(self.proventos_chart_frame, fig_divs, "proventos_mensal")
 
     def mark_darf_as_paid(self):
         """Abre janela para confirmar e registrar o pagamento do DARF selecionado."""
