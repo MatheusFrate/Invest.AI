@@ -84,8 +84,9 @@ class InvestAIApp(InvestApp):
         self.btn_nav_carteira.grid(row=2, column=0, padx=20, pady=6, sticky="ew")
         self.btn_nav_vendas.grid(row=3, column=0, padx=20, pady=6, sticky="ew")
         self.btn_nav_proventos.grid(row=4, column=0, padx=20, pady=6, sticky="ew")
-        self.btn_nav_nova.grid(row=5, column=0, padx=20, pady=6, sticky="ew")
-        self.btn_nav_historico.grid(row=6, column=0, padx=20, pady=6, sticky="ew")
+        self.btn_nav_rentabilidade.grid(row=5, column=0, padx=20, pady=6, sticky="ew")
+        self.btn_nav_nova.grid(row=6, column=0, padx=20, pady=6, sticky="ew")
+        self.btn_nav_historico.grid(row=7, column=0, padx=20, pady=6, sticky="ew")
 
     def _add_copiloto_view(self):
         """Cria e adiciona a view do Copiloto IA ao dicionário de views."""

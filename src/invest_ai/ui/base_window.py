@@ -21,6 +21,8 @@ from invest_ai.ui.charts import (
     create_monthly_dividends_figure,
     create_profitability_by_ticker_figure,
     create_sales_darf_summary_figure,
+    create_total_return_pct_figure,
+    create_total_return_breakdown_figure,
     attach_matplotlib_tooltip,
 )
 from invest_ai.services.excel_handler import (
@@ -55,6 +57,7 @@ class InvestApp(ctk.CTk):
         self.charts_visible = True
         self.carteira_chart_mode = "Alocação"
         self.vendas_chart_visible = False
+        self.rentab_charts_visible = True
         self._chart_figures = {}
         self._last_wallet = {}
         self._last_calc_res = {"wallet": {}, "tax_reports": [], "sales": []}
@@ -64,6 +67,9 @@ class InvestApp(ctk.CTk):
         self.carteira_filter_tipo = "Todos"
         self.carteira_sort_col = "ticker"
         self.carteira_sort_reverse = False
+        self.rentab_filter_tipo = "Todos"
+        self.rentab_sort_col = "retorno_total_pct"
+        self.rentab_sort_reverse = True
         self.vendas_filter_ano = "Todos"
         self.proventos_filter_ano = "Todos"
         self.historico_sort_col = "id"
@@ -135,7 +141,7 @@ class InvestApp(ctk.CTk):
     def _build_sidebar(self):
         self.sidebar_frame = ctk.CTkFrame(self, width=220, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
-        self.sidebar_frame.grid_rowconfigure(7, weight=1)
+        self.sidebar_frame.grid_rowconfigure(8, weight=1)
 
         logo_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -165,20 +171,27 @@ class InvestApp(ctk.CTk):
         )
         self.btn_nav_proventos.grid(row=3, column=0, padx=20, pady=8, sticky="ew")
 
+        self.btn_nav_rentabilidade = ctk.CTkButton(
+            self.sidebar_frame, text="📈 Rentabilidade Total",
+            command=lambda: self.show_view("rentabilidade"),
+            height=40, font=ctk.CTkFont(size=14, weight="bold")
+        )
+        self.btn_nav_rentabilidade.grid(row=4, column=0, padx=20, pady=8, sticky="ew")
+
         self.btn_nav_nova = ctk.CTkButton(
             self.sidebar_frame, text="➕ Nova Operação", 
             command=self.prepare_new_operation,
             height=40, font=ctk.CTkFont(size=14, weight="bold"),
             fg_color="#1f7a1f", hover_color="#145214"
         )
-        self.btn_nav_nova.grid(row=4, column=0, padx=20, pady=8, sticky="ew")
+        self.btn_nav_nova.grid(row=5, column=0, padx=20, pady=8, sticky="ew")
 
         self.btn_nav_historico = ctk.CTkButton(
             self.sidebar_frame, text="📑 Extrato Completo", 
             command=lambda: self.show_view("historico"),
             height=40, font=ctk.CTkFont(size=14, weight="bold")
         )
-        self.btn_nav_historico.grid(row=5, column=0, padx=20, pady=8, sticky="ew")
+        self.btn_nav_historico.grid(row=6, column=0, padx=20, pady=8, sticky="ew")
 
         self.lbl_sync_status = ctk.CTkLabel(
             self.sidebar_frame,
@@ -186,7 +199,7 @@ class InvestApp(ctk.CTk):
             text_color="#9ca3af",
             font=ctk.CTkFont(size=11)
         )
-        self.lbl_sync_status.grid(row=8, column=0, padx=20, pady=(10, 2))
+        self.lbl_sync_status.grid(row=9, column=0, padx=20, pady=(10, 2))
 
         lbl_status = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -194,14 +207,14 @@ class InvestApp(ctk.CTk):
             text_color="gray70", 
             font=ctk.CTkFont(size=11)
         )
-        lbl_status.grid(row=9, column=0, padx=20, pady=(4, 5))
+        lbl_status.grid(row=10, column=0, padx=20, pady=(4, 5))
 
         btn_reload = ctk.CTkButton(
             self.sidebar_frame, text="🔄 Recarregar Dados", 
             command=self.load_data, height=32, 
             fg_color="#333333", hover_color="#444444"
         )
-        btn_reload.grid(row=10, column=0, padx=20, pady=(5, 20), sticky="ew")
+        btn_reload.grid(row=11, column=0, padx=20, pady=(5, 20), sticky="ew")
 
     def _build_main_panel(self):
         self.main_container = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -213,6 +226,7 @@ class InvestApp(ctk.CTk):
             "carteira": self._create_carteira_view(),
             "vendas": self._create_vendas_view(),
             "proventos": self._create_proventos_view(),
+            "rentabilidade": self._create_rentabilidade_view(),
             "form_op": self._create_form_op_view(),
             "historico": self._create_historico_view()
         }
@@ -693,6 +707,154 @@ class InvestApp(ctk.CTk):
         self._setup_tree_tags_and_context_menu(self.tree_proventos_detalhe, ticker_col_idx=1)
 
         self._render_proventos_chart({})
+        return frame
+
+    # -------------------------------------------------------------
+    # VIEW: RENTABILIDADE TOTAL (VALORIZAÇÃO DA COTA + PROVENTOS)
+    # -------------------------------------------------------------
+    def _create_rentabilidade_view(self):
+        frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(2, weight=0)
+        frame.grid_rowconfigure(3, weight=0)
+        frame.grid_rowconfigure(4, weight=1)
+
+        # Cabeçalho
+        header_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        header_frame.grid_columnconfigure(0, weight=1)
+
+        title = ctk.CTkLabel(
+            header_frame,
+            text="Rentabilidade Total (Cota + Proventos)",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            anchor="w",
+        )
+        title.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        self.btn_toggle_rentab_charts = ctk.CTkButton(
+            header_frame,
+            text="📊 Ocultar Gráficos",
+            command=self._toggle_rentab_charts,
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#374151",
+            hover_color="#4b5563",
+        )
+        self.btn_toggle_rentab_charts.grid(row=0, column=1, sticky="e", padx=(0, 8))
+
+        self.btn_sync_rentab = ctk.CTkButton(
+            header_frame,
+            text="📡 Atualizar Dados",
+            command=self._sync_all_for_rentabilidade,
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#0f766e",
+            hover_color="#115e59",
+        )
+        self.btn_sync_rentab.grid(row=0, column=2, sticky="e")
+
+        # Cards de Resumo Consolidado (4 colunas)
+        cards_frame = ctk.CTkFrame(frame)
+        cards_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        cards_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        self.card_rentab_investido = self._create_stat_card(cards_frame, 0, "Total Investido", "R$ 0,00", "#1f538d")
+        self.card_rentab_valorizacao = self._create_stat_card(cards_frame, 1, "Valorização da Cota", "R$ 0,00", "#2d4a22")
+        self.card_rentab_proventos = self._create_stat_card(cards_frame, 2, "Proventos Acumulados", "R$ 0,00", "#145214")
+        self.card_rentab_total = self._create_stat_card(cards_frame, 3, "Retorno Total (Cota + Prov.)", "R$ 0,00", "#0f766e")
+
+        # Gráficos (Composição Cota vs. Proventos + Retorno Total %)
+        self.rentab_charts_frame = ctk.CTkFrame(frame, height=225)
+        self.rentab_charts_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        self.rentab_charts_frame.grid_propagate(False)
+        self.rentab_charts_frame.grid_columnconfigure((0, 1), weight=1)
+        self.rentab_charts_frame.grid_rowconfigure(0, weight=1)
+
+        self.chart_rentab_breakdown_container = ctk.CTkFrame(
+            self.rentab_charts_frame, fg_color="#2b2b2b", corner_radius=8
+        )
+        self.chart_rentab_breakdown_container.grid(row=0, column=0, sticky="nsew", padx=(6, 4), pady=6)
+
+        self.chart_rentab_pct_container = ctk.CTkFrame(
+            self.rentab_charts_frame, fg_color="#2b2b2b", corner_radius=8
+        )
+        self.chart_rentab_pct_container.grid(row=0, column=1, sticky="nsew", padx=(4, 6), pady=6)
+
+        # Barra de Filtro Rápido por Classe
+        filter_bar = ctk.CTkFrame(frame, fg_color="transparent")
+        filter_bar.grid(row=3, column=0, sticky="ew", pady=(0, 6))
+        filter_bar.grid_columnconfigure(1, weight=1)
+
+        lbl_filtro_r = ctk.CTkLabel(filter_bar, text="Classe:", font=ctk.CTkFont(size=12, weight="bold"))
+        lbl_filtro_r.grid(row=0, column=0, sticky="w", padx=(0, 6))
+
+        self.seg_filtro_rentab_tipo = ctk.CTkSegmentedButton(
+            filter_bar,
+            values=["Todos", "FII", "AÇÃO", "ETF", "BDR"],
+            command=self._on_rentab_tipo_filter_changed,
+            height=28,
+            font=ctk.CTkFont(size=12),
+        )
+        self.seg_filtro_rentab_tipo.set("Todos")
+        self.seg_filtro_rentab_tipo.grid(row=0, column=1, sticky="w")
+
+        # Tabela Consolidada
+        tbl_container = ctk.CTkFrame(frame)
+        tbl_container.grid(row=4, column=0, sticky="nsew")
+        tbl_container.grid_rowconfigure(0, weight=1)
+        tbl_container.grid_columnconfigure(0, weight=1)
+
+        cols = (
+            "ticker",
+            "tipo",
+            "investido",
+            "patrimonio",
+            "val_cota",
+            "val_cota_pct",
+            "proventos",
+            "yoc_pct",
+            "retorno_total",
+            "retorno_total_pct",
+        )
+        self.tree_rentabilidade = ttk.Treeview(
+            tbl_container, columns=cols, show="headings", selectmode="browse", height=8
+        )
+        rentab_headings = {
+            "ticker": "Ativo / Cota",
+            "tipo": "Tipo",
+            "investido": "Total Investido",
+            "patrimonio": "Patrimônio Atual",
+            "val_cota": "Valoriz. Cota (R$)",
+            "val_cota_pct": "Valoriz. (%)",
+            "proventos": "Proventos (R$)",
+            "yoc_pct": "Yield s/ Custo",
+            "retorno_total": "Retorno Total (R$)",
+            "retorno_total_pct": "Retorno Total (%)",
+        }
+        for col_id, col_title in rentab_headings.items():
+            suf = " ▼" if col_id == "retorno_total_pct" else " ↕"
+            self.tree_rentabilidade.heading(
+                col_id,
+                text=f"{col_title}{suf}",
+                command=lambda c=col_id: self._sort_rentabilidade(c),
+            )
+
+        self.tree_rentabilidade.column("ticker", width=90, minwidth=80, anchor="center")
+        self.tree_rentabilidade.column("tipo", width=70, minwidth=60, anchor="center")
+        self.tree_rentabilidade.column("investido", width=115, minwidth=100, anchor="e")
+        self.tree_rentabilidade.column("patrimonio", width=120, minwidth=105, anchor="e")
+        self.tree_rentabilidade.column("val_cota", width=125, minwidth=105, anchor="e")
+        self.tree_rentabilidade.column("val_cota_pct", width=95, minwidth=85, anchor="e")
+        self.tree_rentabilidade.column("proventos", width=115, minwidth=100, anchor="e")
+        self.tree_rentabilidade.column("yoc_pct", width=105, minwidth=95, anchor="e")
+        self.tree_rentabilidade.column("retorno_total", width=130, minwidth=110, anchor="e")
+        self.tree_rentabilidade.column("retorno_total_pct", width=125, minwidth=105, anchor="e")
+
+        self._attach_tree_scrollbars(tbl_container, self.tree_rentabilidade)
+        self._setup_tree_tags_and_context_menu(self.tree_rentabilidade, ticker_col_idx=0)
+
+        self._render_rentab_charts({}, {}, {})
         return frame
 
     # -------------------------------------------------------------
@@ -1253,11 +1415,22 @@ class InvestApp(ctk.CTk):
         # 3. Extrato Completo
         self._populate_historico_table()
 
+        # 4. Rentabilidade Total (Cota + Proventos)
+        if self.dividends_data:
+            self._last_dividends_calc = calculate_historical_dividends(
+                self.transactions, self.dividends_data
+            )
+        self._update_rentabilidade_view()
+
     def _update_sync_status_label(self):
         if self.is_fetching_quotes or self.is_fetching_dividends:
             self.lbl_sync_status.configure(text="⏳ Sincronizando B3...", text_color="#fbbf24")
+            if hasattr(self, "btn_sync_rentab"):
+                self.btn_sync_rentab.configure(text="⏳ Atualizando...", state="disabled")
         else:
             self.lbl_sync_status.configure(text="✅ B3 sincronizada", text_color="#34d399")
+            if hasattr(self, "btn_sync_rentab"):
+                self.btn_sync_rentab.configure(text="📡 Atualizar Dados", state="normal")
 
     def refresh_quotes_async(self):
         """Dispara a busca de cotações em background sem travar a interface."""
@@ -1388,6 +1561,201 @@ class InvestApp(ctk.CTk):
         self.card_media_mensal.configure(text=f"R$ {media_mensal:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         self.card_yield_medio.configure(text=f"{yield_anual:.2f}% a.a.")
         self._render_proventos_chart(stats_filtradas)
+        self._update_rentabilidade_view()
+
+    def _sync_all_for_rentabilidade(self):
+        """Dispara atualização simultânea de cotações B3 e histórico de proventos."""
+        self.refresh_quotes_async()
+        self.refresh_dividends_async()
+
+    def _toggle_rentab_charts(self):
+        """Alterna a exibição do painel de gráficos da tela de Rentabilidade Total."""
+        self.rentab_charts_visible = not self.rentab_charts_visible
+        if self.rentab_charts_visible:
+            self.rentab_charts_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+            self.btn_toggle_rentab_charts.configure(text="📊 Ocultar Gráficos")
+            proventos_map = self._consolidar_proventos_por_ticker()
+            self._render_rentab_charts(self._last_wallet, self.live_quotes, proventos_map)
+        else:
+            self.rentab_charts_frame.grid_forget()
+            self.btn_toggle_rentab_charts.configure(text="📊 Mostrar Gráficos")
+
+    def _on_rentab_tipo_filter_changed(self, value: str):
+        self.rentab_filter_tipo = value
+        self._populate_rentabilidade_table()
+
+    def _sort_rentabilidade(self, col: str):
+        if self.rentab_sort_col == col:
+            self.rentab_sort_reverse = not self.rentab_sort_reverse
+        else:
+            self.rentab_sort_col = col
+            self.rentab_sort_reverse = col not in ("ticker", "tipo")
+
+        col_names = {
+            "ticker": "Ativo / Cota",
+            "tipo": "Tipo",
+            "investido": "Total Investido",
+            "patrimonio": "Patrimônio Atual",
+            "val_cota": "Valoriz. Cota (R$)",
+            "val_cota_pct": "Valoriz. (%)",
+            "proventos": "Proventos (R$)",
+            "yoc_pct": "Yield s/ Custo",
+            "retorno_total": "Retorno Total (R$)",
+            "retorno_total_pct": "Retorno Total (%)",
+        }
+        for c, base_title in col_names.items():
+            if c == self.rentab_sort_col:
+                arrow = " ▲" if not self.rentab_sort_reverse else " ▼"
+                self.tree_rentabilidade.heading(c, text=f"{base_title}{arrow}")
+            else:
+                self.tree_rentabilidade.heading(c, text=f"{base_title} ↕")
+
+        self._populate_rentabilidade_table()
+
+    def _consolidar_proventos_por_ticker(self) -> dict[str, float]:
+        """Soma os proventos recebidos por ticker, preservando o vínculo após conversões de código."""
+        conv_map: dict[str, str] = {}
+        for tx in self.transactions:
+            if tx.operacao == "conversao" and "->" in tx.ticker:
+                origem, destino = [p.strip().upper() for p in tx.ticker.split("->", 1)]
+                if origem and destino:
+                    conv_map[origem] = destino
+
+        def _resolver_destino(t: str) -> str:
+            atual = t.strip().upper()
+            visitados = set()
+            while atual in conv_map and atual not in visitados:
+                visitados.add(atual)
+                atual = conv_map[atual]
+            return atual
+
+        totais: dict[str, float] = {}
+        todos_pagamentos, _ = self._last_dividends_calc
+        for p in todos_pagamentos:
+            ticker_atual = _resolver_destino(str(p.get("ticker", "")))
+            totais[ticker_atual] = totais.get(ticker_atual, 0.0) + float(p.get("total", 0.0) or 0.0)
+        return totais
+
+    def _update_rentabilidade_view(self):
+        """Atualiza cards, gráficos e tabela consolidada de Rentabilidade Total."""
+        wallet = self._last_calc_res.get("wallet", {})
+        proventos_map = self._consolidar_proventos_por_ticker()
+
+        total_investido = 0.0
+        patrimonio_atual = 0.0
+        proventos_carteira_ativa = 0.0
+
+        for ticker, data in wallet.items():
+            qtd = data["quantidade"]
+            investido = data["total_investido"]
+            total_investido += investido
+
+            quote_data = self.live_quotes.get(ticker)
+            if quote_data and quote_data.get("price") is not None:
+                patrimonio_atual += qtd * quote_data["price"]
+            else:
+                patrimonio_atual += investido
+
+            proventos_carteira_ativa += proventos_map.get(ticker.upper(), 0.0)
+
+        # Soma também proventos de ativos eventualmente já encerrados para o consolidado geral
+        proventos_totais = sum(proventos_map.values()) if proventos_map else proventos_carteira_ativa
+        valorizacao_cota = patrimonio_atual - total_investido
+        retorno_total = valorizacao_cota + proventos_totais
+
+        val_pct = (valorizacao_cota / total_investido * 100.0) if total_investido > 0 else 0.0
+        prov_pct = (proventos_totais / total_investido * 100.0) if total_investido > 0 else 0.0
+        total_pct = (retorno_total / total_investido * 100.0) if total_investido > 0 else 0.0
+
+        def _fmt_rs(val: float, with_sign: bool = False) -> str:
+            s = f"R$ {abs(val):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            if with_sign:
+                return f"{'+' if val >= 0 else '-'}{s}"
+            return f"-{s}" if val < 0 else s
+
+        self.card_rentab_investido.configure(text=_fmt_rs(total_investido))
+        self.card_rentab_valorizacao.configure(text=f"{_fmt_rs(valorizacao_cota, True)} ({val_pct:+.2f}%)")
+        self.card_rentab_proventos.configure(text=f"{_fmt_rs(proventos_totais, True)} (+{prov_pct:.2f}%)")
+        self.card_rentab_total.configure(text=f"{_fmt_rs(retorno_total, True)} ({total_pct:+.2f}%)")
+
+        self._populate_rentabilidade_table(proventos_map)
+        if self.rentab_charts_visible:
+            self._render_rentab_charts(wallet, self.live_quotes, proventos_map)
+
+    def _populate_rentabilidade_table(self, proventos_map: dict[str, float] | None = None):
+        if proventos_map is None:
+            proventos_map = self._consolidar_proventos_por_ticker()
+
+        for item in self.tree_rentabilidade.get_children():
+            self.tree_rentabilidade.delete(item)
+
+        wallet = self._last_calc_res.get("wallet", {})
+        linhas = []
+        for ticker, data in wallet.items():
+            tipo_upper = data["tipo_ativo"].upper()
+            if self.rentab_filter_tipo != "Todos" and tipo_upper != self.rentab_filter_tipo:
+                continue
+
+            qtd = data["quantidade"]
+            investido = data["total_investido"]
+            quote_data = self.live_quotes.get(ticker)
+            if quote_data and quote_data.get("price") is not None:
+                patrimonio = qtd * quote_data["price"]
+                str_patrimonio = f"R$ {patrimonio:.2f}"
+            else:
+                patrimonio = investido
+                str_patrimonio = f"R$ {investido:.2f}"
+
+            val_cota = patrimonio - investido
+            val_cota_pct = (val_cota / investido * 100.0) if investido > 0 else 0.0
+            proventos = proventos_map.get(ticker.upper(), 0.0)
+            yoc_pct = (proventos / investido * 100.0) if investido > 0 else 0.0
+            retorno_total = val_cota + proventos
+            retorno_total_pct = (retorno_total / investido * 100.0) if investido > 0 else 0.0
+
+            linhas.append({
+                "ticker": data["ticker"],
+                "tipo": tipo_upper,
+                "investido": investido,
+                "patrimonio": patrimonio,
+                "val_cota": val_cota,
+                "val_cota_pct": val_cota_pct,
+                "proventos": proventos,
+                "yoc_pct": yoc_pct,
+                "retorno_total": retorno_total,
+                "retorno_total_pct": retorno_total_pct,
+                "values": (
+                    data["ticker"],
+                    tipo_upper,
+                    f"R$ {investido:.2f}",
+                    str_patrimonio,
+                    f"{'+' if val_cota >= 0 else '-'}R$ {abs(val_cota):.2f}",
+                    f"{val_cota_pct:+.2f}%",
+                    f"R$ {proventos:.2f}",
+                    f"+{yoc_pct:.2f}%",
+                    f"{'+' if retorno_total >= 0 else '-'}R$ {abs(retorno_total):.2f}",
+                    f"{retorno_total_pct:+.2f}%",
+                ),
+            })
+
+        sort_col = self.rentab_sort_col
+        linhas.sort(key=lambda r: r.get(sort_col, r["ticker"]), reverse=self.rentab_sort_reverse)
+
+        for idx, row in enumerate(linhas):
+            tags = ["even" if idx % 2 == 0 else "odd"]
+            if row["retorno_total"] > 0.005:
+                tags.append("profit")
+            elif row["retorno_total"] < -0.005:
+                tags.append("loss")
+            self.tree_rentabilidade.insert("", "end", values=row["values"], tags=tuple(tags))
+
+    def _render_rentab_charts(self, wallet: dict, live_quotes: dict, proventos_map: dict):
+        """Atualiza os gráficos da tela de Rentabilidade Total."""
+        fig_break = create_total_return_breakdown_figure(wallet, live_quotes, proventos_map)
+        self._render_figure_in_container(self.chart_rentab_breakdown_container, fig_break, "rentab_breakdown")
+
+        fig_pct = create_total_return_pct_figure(wallet, live_quotes, proventos_map)
+        self._render_figure_in_container(self.chart_rentab_pct_container, fig_pct, "rentab_pct")
 
     def _render_figure_in_container(self, container, figure, slot_key: str):
         """Renderiza uma Figure Matplotlib em um container CTkFrame fechando a figura anterior."""

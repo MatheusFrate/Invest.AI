@@ -15,6 +15,8 @@ from invest_ai.ui.charts import (
     create_monthly_dividends_figure,
     create_profitability_by_ticker_figure,
     create_sales_darf_summary_figure,
+    create_total_return_pct_figure,
+    create_total_return_breakdown_figure,
     attach_matplotlib_tooltip,
 )
 
@@ -219,3 +221,55 @@ def test_attach_matplotlib_tooltip_registra_evento():
     args, _ = canvas.mpl_connect.call_args
     assert args[0] == "motion_notify_event"
     assert callable(args[1])
+
+
+def test_create_total_return_pct_figure_soma_cota_e_proventos():
+    wallet = {
+        "MXRF11": {"quantidade": 100.0, "total_investido": 1000.0, "tipo_ativo": "fii"},
+        "IRIM11": {"quantidade": 10.0, "total_investido": 1000.0, "tipo_ativo": "fii"},
+    }
+    live_quotes = {
+        "MXRF11": {"price": 9.5},   # cota: -50 (-5%)
+        "IRIM11": {"price": 105.0}, # cota: +50 (+5%)
+    }
+    proventos = {
+        "MXRF11": 150.0,  # +15% -> total +10% (+100)
+        "IRIM11": 100.0,  # +10% -> total +15% (+150)
+    }
+
+    fig = create_total_return_pct_figure(wallet, live_quotes, proventos)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Retorno Total por Ativo (%)"
+    y_labels = [lbl.get_text() for lbl in ax.get_yticklabels()]
+    assert y_labels == ["MXRF11", "IRIM11"]
+    widths = [rect.get_width() for rect in ax.patches]
+    assert widths == pytest.approx([10.0, 15.0])
+
+    # Caso vazio
+    fig_vazio = create_total_return_pct_figure({})
+    ax_vazio = fig_vazio.axes[0]
+    assert any("Sem ativos em custódia" in t.get_text() for t in ax_vazio.texts)
+
+
+def test_create_total_return_breakdown_figure_com_dados_e_vazio():
+    wallet = {
+        "MXRF11": {"quantidade": 100.0, "total_investido": 1000.0, "tipo_ativo": "fii"},
+        "PETR4": {"quantidade": 10.0, "total_investido": 400.0, "tipo_ativo": "ação"},
+    }
+    live_quotes = {
+        "MXRF11": {"price": 9.5},  # -50 cota
+        "PETR4": {"price": 45.0},  # +50 cota
+    }
+    proventos = {"MXRF11": 120.0, "PETR4": 40.0}
+
+    fig = create_total_return_breakdown_figure(wallet, live_quotes, proventos)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Composição: Cota vs. Proventos (R$)"
+    # 2 ativos * 2 barras (Valorização + Proventos) = 4 patches
+    assert len(ax.patches) == 4
+
+    fig_vazio = create_total_return_breakdown_figure({})
+    ax_vazio = fig_vazio.axes[0]
+    assert any("Sem ativos em custódia" in t.get_text() for t in ax_vazio.texts)

@@ -472,3 +472,162 @@ def attach_matplotlib_tooltip(canvas, figure: Figure):
             canvas.draw_idle()
 
     return canvas.mpl_connect("motion_notify_event", _on_hover)
+
+
+def _calcular_retorno_total_ativos(
+    wallet: Dict[str, Dict],
+    live_quotes: Optional[Dict[str, Dict]] = None,
+    proventos_por_ticker: Optional[Dict[str, float]] = None,
+) -> List[Dict]:
+    """
+    Calcula o retorno total por ativo unificando valorização da cota e proventos recebidos.
+    """
+    quotes = live_quotes or {}
+    proventos_map = {k.strip().upper(): float(v or 0.0) for k, v in (proventos_por_ticker or {}).items()}
+    itens: List[Dict] = []
+
+    for ticker, dados in wallet.items():
+        qtd = float(dados.get("quantidade", 0.0) or 0.0)
+        investido = float(dados.get("total_investido", 0.0) or 0.0)
+        if qtd <= 0 or investido <= 0:
+            continue
+
+        t_upper = ticker.strip().upper()
+        quote = quotes.get(ticker) or quotes.get(t_upper) or {}
+        preco_vivo = quote.get("price")
+        if preco_vivo is not None and float(preco_vivo) > 0:
+            patrimonio = qtd * float(preco_vivo)
+        else:
+            patrimonio = investido
+
+        ganho_cota = patrimonio - investido
+        proventos = proventos_map.get(t_upper, 0.0)
+        retorno_rs = ganho_cota + proventos
+        cota_pct = (ganho_cota / investido) * 100.0
+        prov_pct = (proventos / investido) * 100.0
+        total_pct = (retorno_rs / investido) * 100.0
+
+        itens.append({
+            "ticker": t_upper,
+            "investido": investido,
+            "patrimonio": patrimonio,
+            "ganho_cota": ganho_cota,
+            "proventos": proventos,
+            "retorno_rs": retorno_rs,
+            "cota_pct": cota_pct,
+            "prov_pct": prov_pct,
+            "total_pct": total_pct,
+        })
+
+    return itens
+
+
+def create_total_return_pct_figure(
+    wallet: Dict[str, Dict],
+    live_quotes: Optional[Dict[str, Dict]] = None,
+    proventos_por_ticker: Optional[Dict[str, float]] = None,
+    top_n: int = 8,
+    figsize: Tuple[float, float] = (4.8, 2.4),
+) -> Figure:
+    """Gera gráfico de barras horizontais divergentes com o Retorno Total (%) (Cota + Proventos)."""
+    fig, ax = _criar_figura_base(figsize)
+    itens = _calcular_retorno_total_ativos(wallet, live_quotes, proventos_por_ticker)
+
+    if not itens:
+        _renderizar_estado_vazio(ax, "Retorno Total por Ativo (%)", "Sem ativos em custódia")
+        fig.tight_layout()
+        return fig
+
+    top_itens = sorted(itens, key=lambda x: abs(x["total_pct"]), reverse=True)[:top_n]
+    ordenados = sorted(top_itens, key=lambda x: x["total_pct"])
+
+    tickers = [x["ticker"] for x in ordenados]
+    totais_pct = [x["total_pct"] for x in ordenados]
+    cores = [ACCENT_GREEN if v >= 0 else ACCENT_RED for v in totais_pct]
+
+    bars = ax.barh(tickers, totais_pct, color=cores, height=0.6)
+    max_abs = max((abs(v) for v in totais_pct), default=5.0)
+    pad = max(max_abs * 0.28, 2.0)
+    ax.set_xlim(min(min(totais_pct), 0.0) - pad, max(max(totais_pct), 0.0) + pad)
+    ax.axvline(0, color=GRID_COLOR, linewidth=1)
+    ax.xaxis.grid(True, linestyle="--", alpha=0.25, color=GRID_COLOR)
+    ax.set_axisbelow(True)
+
+    offset = max(max_abs * 0.03, 0.3)
+    for item, bar in zip(ordenados, bars):
+        val = item["total_pct"]
+        ha = "left" if val >= 0 else "right"
+        x_pos = bar.get_width() + offset if val >= 0 else bar.get_width() - offset
+        ax.text(
+            x_pos,
+            bar.get_y() + bar.get_height() / 2.0,
+            f"{val:+.1f}%",
+            va="center",
+            ha=ha,
+            color=TEXT_COLOR,
+            fontsize=8,
+        )
+        bar._tooltip_text = (
+            f"{item['ticker']}: {val:+.2f}% "
+            f"(Cota: {item['cota_pct']:+.2f}% | Prov: +{item['prov_pct']:.2f}%)"
+        )
+
+    ax.set_title("Retorno Total por Ativo (%)", color=TEXT_COLOR, fontsize=10, fontweight="bold", pad=8)
+    fig.tight_layout()
+    return fig
+
+
+def create_total_return_breakdown_figure(
+    wallet: Dict[str, Dict],
+    live_quotes: Optional[Dict[str, Dict]] = None,
+    proventos_por_ticker: Optional[Dict[str, float]] = None,
+    top_n: int = 8,
+    figsize: Tuple[float, float] = (4.8, 2.4),
+) -> Figure:
+    """Gera gráfico comparando Valorização da Cota (R$) vs. Proventos Recebidos (R$) por ativo."""
+    fig, ax = _criar_figura_base(figsize)
+    itens = _calcular_retorno_total_ativos(wallet, live_quotes, proventos_por_ticker)
+
+    if not itens:
+        _renderizar_estado_vazio(ax, "Composição: Cota vs. Proventos (R$)", "Sem ativos em custódia")
+        fig.tight_layout()
+        return fig
+
+    top_itens = sorted(itens, key=lambda x: abs(x["retorno_rs"]), reverse=True)[:top_n]
+    ordenados = sorted(top_itens, key=lambda x: x["retorno_rs"])
+
+    y_idx = list(range(len(ordenados)))
+    height = 0.36
+    y_cota = [y - height / 2 for y in y_idx]
+    y_prov = [y + height / 2 for y in y_idx]
+
+    ganhos_cota = [x["ganho_cota"] for x in ordenados]
+    proventos = [x["proventos"] for x in ordenados]
+    cores_cota = ["#3b82f6" if v >= 0 else ACCENT_RED for v in ganhos_cota]
+
+    bars_cota = ax.barh(y_cota, ganhos_cota, height=height, color=cores_cota, label="Valorização")
+    bars_prov = ax.barh(y_prov, proventos, height=height, color=ACCENT_GREEN, label="Proventos")
+
+    for item, b_cota in zip(ordenados, bars_cota):
+        v = item["ganho_cota"]
+        sinal = "+" if v >= 0 else "-"
+        b_cota._tooltip_text = (
+            f"{item['ticker']} • Cota: {sinal}R$ {abs(v):,.2f} ({item['cota_pct']:+.2f}%)"
+            .replace(",", "X").replace(".", ",").replace("X", ".")
+        )
+    for item, b_prov in zip(ordenados, bars_prov):
+        v = item["proventos"]
+        b_prov._tooltip_text = (
+            f"{item['ticker']} • Proventos: +R$ {v:,.2f} ({item['prov_pct']:.2f}%)"
+            .replace(",", "X").replace(".", ",").replace("X", ".")
+        )
+
+    ax.axvline(0, color=GRID_COLOR, linewidth=1)
+    ax.xaxis.grid(True, linestyle="--", alpha=0.25, color=GRID_COLOR)
+    ax.set_axisbelow(True)
+    ax.set_yticks(y_idx)
+    ax.set_yticklabels([x["ticker"] for x in ordenados], fontsize=8)
+    ax.legend(loc="lower right", frameon=False, labelcolor=TEXT_COLOR, fontsize=7.5)
+    ax.set_title("Composição: Cota vs. Proventos (R$)", color=TEXT_COLOR, fontsize=10, fontweight="bold", pad=8)
+    fig.tight_layout()
+    return fig
