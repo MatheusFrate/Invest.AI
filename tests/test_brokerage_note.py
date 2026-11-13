@@ -291,6 +291,27 @@ def test_is_duplicate_transaction():
     )
     assert is_duplicate_transaction(nova_venda, lista_existentes) is False
 
+    # Diferença real de R$ 0,01 não deve ser tratada como duplicata
+    venda_6681 = Transaction(
+        ticker="IRIM11",
+        operacao="venda",
+        tipo_ativo="fii",
+        quantidade=1.0,
+        valor_unitario=66.81,
+        valor_total=66.81,
+        data="19/10/2026"
+    )
+    venda_6682 = Transaction(
+        ticker="IRIM11",
+        operacao="venda",
+        tipo_ativo="fii",
+        quantidade=1.0,
+        valor_unitario=66.82,
+        valor_total=66.82,
+        data="19/10/2026"
+    )
+    assert is_duplicate_transaction(venda_6682, [venda_6681]) is False
+
 
 def test_prevencao_duplicidade_ao_salvar_excel(tmp_path):
     """Testa bloqueio de duplicatas ao gravar na planilha individualmente."""
@@ -371,6 +392,79 @@ def test_salvar_lote_com_prevencao_duplicidade(tmp_path):
         assert "/" in t.data
 
 
+def test_salvar_lote_vendas_parciais_diferenca_um_centavo(tmp_path):
+    """Vendas parciais no mesmo dia e quantidade com R$ 0,01 de diferença devem ser todas salvas."""
+    caminho = tmp_path / "planilha_centavo.xlsx"
+    lote = [
+        Transaction(
+            ticker="IRIM11",
+            operacao="venda",
+            tipo_ativo="fii",
+            quantidade=1.0,
+            valor_unitario=66.81,
+            valor_total=66.81,
+            data="19/10/2026",
+        ),
+        Transaction(
+            ticker="IRIM11",
+            operacao="venda",
+            tipo_ativo="fii",
+            quantidade=1.0,
+            valor_unitario=66.82,
+            valor_total=66.82,
+            data="19/10/2026",
+        ),
+    ]
+
+    salvas, duplicadas = save_transactions_batch_to_excel(lote, str(caminho), prevent_duplicates=True)
+    assert salvas == 2
+    assert duplicadas == 0
+
+    todas = load_transactions_from_excel(str(caminho))
+    assert len(todas) == 2
+
+
+def test_salvar_lote_execucoes_parciais_identicas_e_reimportacao(tmp_path):
+    """
+    Duas execuções parciais idênticas na mesma nota devem ser salvas na 1ª importação,
+    mas bloqueadas 1-para-1 se o mesmo lote for reimportado.
+    """
+    caminho = tmp_path / "planilha_parciais_identicas.xlsx"
+    lote = [
+        Transaction(
+            ticker="IRIM11",
+            operacao="venda",
+            tipo_ativo="fii",
+            quantidade=1.0,
+            valor_unitario=66.81,
+            valor_total=66.81,
+            data="19/10/2026",
+        ),
+        Transaction(
+            ticker="IRIM11",
+            operacao="venda",
+            tipo_ativo="fii",
+            quantidade=1.0,
+            valor_unitario=66.81,
+            valor_total=66.81,
+            data="19/10/2026",
+        ),
+    ]
+
+    # 1ª importação: ambas as execuções parciais são salvas
+    salvas1, duplicadas1 = save_transactions_batch_to_excel(lote, str(caminho), prevent_duplicates=True)
+    assert salvas1 == 2
+    assert duplicadas1 == 0
+
+    # 2ª importação do mesmo lote: ambas dão match 1-para-1 e são bloqueadas
+    salvas2, duplicadas2 = save_transactions_batch_to_excel(lote, str(caminho), prevent_duplicates=True)
+    assert salvas2 == 0
+    assert duplicadas2 == 2
+
+    todas = load_transactions_from_excel(str(caminho))
+    assert len(todas) == 2
+
+
 def test_normalizar_todas_datas_planilha(tmp_path):
     """Testa higienização retroativa de linhas com datas no formato YYYY-MM-DD."""
     caminho = tmp_path / "planilha_antiga.xlsx"
@@ -392,4 +486,136 @@ def test_normalizar_todas_datas_planilha(tmp_path):
     assert ws2.cell(row=2, column=7).value == "19/10/2026"
     assert ws2.cell(row=3, column=7).value == "15/10/2026"
     assert ws2.cell(row=4, column=7).value == "11/08/2026"
+
+
+def test_rateio_compra_unica_soma_custo():
+    """Compra única com taxa deve somar os emolumentos ao custo total e recalcular preço unitário."""
+    nota = BrokerageNoteSchema(
+        numero_nota="1001",
+        data_pregao="04/11/2026",
+        corretora="XP",
+        total_custos_emolumentos=2.50,
+        transacoes=[
+            TransactionSchema(
+                ticker="PETR4",
+                operacao="compra",
+                quantidade=100,
+                valor_unitario=35.00,
+                valor_total=3500.00,
+            )
+        ],
+    )
+
+    rateadas = nota.aplicar_rateio_custos()
+    assert len(rateadas) == 1
+    assert rateadas[0].valor_total == 3502.50
+    assert rateadas[0].valor_unitario == 35.025
+    assert "Taxa rateada: R$ 2.50" in (rateadas[0].observacao or "")
+    # Garante que a nota original não foi mutada
+    assert nota.transacoes[0].valor_total == 3500.00
+
+
+def test_rateio_venda_unica_deduz_taxa():
+    """Venda bruta de R$ 1.069,03 com R$ 0,30 de taxas deve resultar em líquido de R$ 1.068,73."""
+    nota = BrokerageNoteSchema(
+        numero_nota="1002",
+        data_pregao="04/11/2026",
+        corretora="Clear",
+        total_custos_emolumentos=0.30,
+        transacoes=[
+            TransactionSchema(
+                ticker="MXRF11",
+                operacao="venda",
+                quantidade=100,
+                valor_total=1069.03,
+            )
+        ],
+    )
+
+    rateadas = nota.aplicar_rateio_custos()
+    assert len(rateadas) == 1
+    assert rateadas[0].valor_total == 1068.73
+    assert rateadas[0].valor_unitario == round(1068.73 / 100, 4)
+    assert "Taxa rateada: R$ 0.30" in (rateadas[0].observacao or "")
+
+
+def test_rateio_multiplas_operacoes_proporcional_e_fechamento_centavos():
+    """Testa rateio proporcional 25%/75% e fechamento exato de centavos em divisão não exata."""
+    nota_prop = BrokerageNoteSchema(
+        numero_nota="1003",
+        data_pregao="05/11/2026",
+        corretora="BTG",
+        total_custos_emolumentos=10.00,
+        transacoes=[
+            TransactionSchema(
+                ticker="ITSA4",
+                operacao="compra",
+                quantidade=25,
+                valor_unitario=10.00,
+                valor_total=250.00,  # 25% do volume
+            ),
+            TransactionSchema(
+                ticker="VALE3",
+                operacao="venda",
+                quantidade=15,
+                valor_unitario=50.00,
+                valor_total=750.00,  # 75% do volume
+            ),
+        ],
+    )
+
+    rateadas = nota_prop.aplicar_rateio_custos()
+    assert rateadas[0].valor_total == 252.50  # 250 + 2.50
+    assert rateadas[0].valor_unitario == 10.10
+    assert rateadas[1].valor_total == 742.50  # 750 - 7.50
+    assert rateadas[1].valor_unitario == 49.50
+
+    # Fechamento exato de centavos (3 operações iguais dividindo R$ 1,00 -> 0.33 + 0.33 + 0.34)
+    nota_centavos = BrokerageNoteSchema(
+        numero_nota="1004",
+        data_pregao="05/11/2026",
+        total_custos_emolumentos=1.00,
+        transacoes=[
+            TransactionSchema(ticker="PETR4", operacao="compra", quantidade=10, valor_unitario=10.00, valor_total=100.00),
+            TransactionSchema(ticker="BBAS3", operacao="compra", quantidade=10, valor_unitario=10.00, valor_total=100.00),
+            TransactionSchema(ticker="WEGE3", operacao="compra", quantidade=10, valor_unitario=10.00, valor_total=100.00),
+        ],
+    )
+
+    rateadas_c = nota_centavos.aplicar_rateio_custos()
+    assert rateadas_c[0].valor_total == 100.33
+    assert rateadas_c[1].valor_total == 100.33
+    assert rateadas_c[2].valor_total == 100.34
+    soma_taxas = sum(round(tx.valor_total - 100.00, 2) for tx in rateadas_c)
+    assert round(soma_taxas, 2) == 1.00
+
+    engine_txs = nota_centavos.to_engine_transactions_com_rateio()
+    assert len(engine_txs) == 3
+    assert engine_txs[2].valor_total == 100.34
+
+
+def test_rateio_custos_zero_mantem_inalterada():
+    """Nota com total_custos_emolumentos == 0.0 deve retornar transações inalteradas."""
+    nota = BrokerageNoteSchema(
+        numero_nota="1005",
+        data_pregao="06/11/2026",
+        corretora="Rico",
+        total_custos_emolumentos=0.0,
+        transacoes=[
+            TransactionSchema(
+                ticker="HGLG11",
+                operacao="compra",
+                quantidade=5,
+                valor_unitario=160.00,
+                valor_total=800.00,
+            )
+        ],
+    )
+
+    rateadas = nota.aplicar_rateio_custos()
+    assert len(rateadas) == 1
+    assert rateadas[0].valor_total == 800.00
+    assert rateadas[0].valor_unitario == 160.00
+    assert rateadas[0].observacao is None
+
 

@@ -49,16 +49,20 @@ def normalizar_data_br(data_val: any) -> str:
     return val_str
 
 
-def is_duplicate_transaction(tx: Transaction, existing_transactions: List[Transaction]) -> bool:
+def find_duplicate_transaction_index(
+    tx: Transaction,
+    existing_transactions: List[Transaction],
+) -> Optional[int]:
     """
-    Verifica se uma transação já existe em uma lista de transações da planilha.
-    Compara ticker, operação, data normalizada (DD/MM/AAAA), quantidade e valores.
+    Retorna o índice da primeira transação em `existing_transactions` que
+    corresponde a `tx` (ticker, operação, data normalizada DD/MM/AAAA, quantidade
+    e valores), ou None se não houver correspondência.
     """
     tx_data_norm = normalizar_data_br(tx.data)
     tx_ticker = tx.ticker.strip().upper()
     tx_operacao = tx.operacao.strip().lower()
 
-    for ext in existing_transactions:
+    for idx, ext in enumerate(existing_transactions):
         if ext.ticker.strip().upper() != tx_ticker:
             continue
         if ext.operacao.strip().lower() != tx_operacao:
@@ -67,13 +71,21 @@ def is_duplicate_transaction(tx: Transaction, existing_transactions: List[Transa
             continue
         if abs(ext.quantidade - tx.quantidade) > 0.0001:
             continue
-        # Verifica se o valor financeiro é compatível (total ou unitário)
-        valor_total_match = abs(ext.valor_total - tx.valor_total) <= 0.05
-        valor_unit_match = abs(ext.valor_unitario - tx.valor_unitario) <= 0.02
+        # Tolerância de 0.005 absorve apenas ruído de ponto flutuante sem confundir diferenças de R$ 0,01
+        valor_total_match = abs(ext.valor_total - tx.valor_total) <= 0.005
+        valor_unit_match = abs(ext.valor_unitario - tx.valor_unitario) <= 0.005
         if valor_total_match or valor_unit_match:
-            return True
+            return idx
 
-    return False
+    return None
+
+
+def is_duplicate_transaction(tx: Transaction, existing_transactions: List[Transaction]) -> bool:
+    """
+    Verifica se uma transação já existe em uma lista de transações da planilha.
+    Compara ticker, operação, data normalizada (DD/MM/AAAA), quantidade e valores.
+    """
+    return find_duplicate_transaction_index(tx, existing_transactions) is not None
 
 
 def load_transactions_from_excel(filepath: str = DEFAULT_EXCEL_PATH) -> List[Transaction]:
@@ -119,6 +131,12 @@ def load_transactions_from_excel(filepath: str = DEFAULT_EXCEL_PATH) -> List[Tra
             
             if 'venda' in operacao:
                 operacao = 'venda'
+            elif 'desdobramento' in operacao or 'split' in operacao:
+                operacao = 'desdobramento'
+            elif 'agrupamento' in operacao or 'inplit' in operacao:
+                operacao = 'agrupamento'
+            elif 'conversao' in operacao or 'conversão' in operacao or 'incorporacao' in operacao or 'incorporação' in operacao:
+                operacao = 'conversao'
             else:
                 operacao = 'compra'
 
@@ -126,6 +144,8 @@ def load_transactions_from_excel(filepath: str = DEFAULT_EXCEL_PATH) -> List[Tra
                 tag = 'ação'
             elif 'etf' in tag:
                 tag = 'etf'
+            elif 'bdr' in tag:
+                tag = 'bdr'
             else:
                 tag = 'fii'
 
@@ -195,7 +215,8 @@ def save_transactions_batch_to_excel(
 ) -> Tuple[int, int]:
     """
     Salva uma lista de transações em lote no Excel com formato DD/MM/AAAA.
-    Verifica duplicatas contra a planilha e dentro do próprio lote.
+    Faz verificação 1-para-1 contra as transações já existentes na planilha
+    antes deste lote, preservando execuções parciais legítimas na mesma nota.
     Retorna: (total_salvas, total_duplicadas_ignoradas).
     """
     if not txs:
@@ -212,13 +233,17 @@ def save_transactions_batch_to_excel(
         ws = _get_movimentacoes_sheet(wb)
         existentes = load_transactions_from_excel(filepath) if prevent_duplicates else []
 
+    existentes_restantes = list(existentes)
     salvas = 0
     duplicadas = 0
 
     for tx in txs:
-        if prevent_duplicates and is_duplicate_transaction(tx, existentes):
-            duplicadas += 1
-            continue
+        if prevent_duplicates:
+            dup_idx = find_duplicate_transaction_index(tx, existentes_restantes)
+            if dup_idx is not None:
+                existentes_restantes.pop(dup_idx)
+                duplicadas += 1
+                continue
 
         data_formatada = normalizar_data_br(tx.data)
         ws.append([
@@ -230,8 +255,6 @@ def save_transactions_batch_to_excel(
             tx.operacao,
             data_formatada
         ])
-        if prevent_duplicates:
-            existentes.append(tx)
         salvas += 1
 
     if salvas > 0:

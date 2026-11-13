@@ -10,7 +10,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.fallback import FallbackModel
 
 from invest_ai.agent.deps import InvestContext
-from invest_ai.agent.schemas import TransactionSchema, BrokerageNoteSchema
+from invest_ai.agent.schemas import TransactionSchema, BrokerageNoteSchema, CorporateEventSchema
 from invest_ai.agent.tools import (
     obter_cotacao_b3,
     consultar_posicao_carteira,
@@ -213,7 +213,45 @@ def criar_agente_nota_corretagem(model: Optional[Union[str, FallbackModel, any]]
     return agente
 
 
+# =====================================================================
+# 4. Agente Extrator de Eventos Corporativos (Split, Inplit, Conversão)
+# =====================================================================
+PROMPT_EXTRATOR_EVENTO_CORPORATIVO = """
+Você é um especialista em eventos corporativos da B3 (desdobramentos, agrupamentos e incorporações/conversões de tickers).
+Sua missão é extrair estruturadamente o evento corporativo informado pelo usuário em linguagem natural.
+
+Diretrizes obrigatórias:
+1. Identifique o `tipo_evento`:
+   - "desdobramento": quando houver split / desdobramento (ex: "1 para 10", "split 1:5"). O `fator` será maior que 1 (ex: 1 para 10 -> fator = 10.0; 1 para 4 -> fator = 4.0).
+   - "agrupamento": quando houver inplit / agrupamento (ex: "10 para 1", "agrupamento 5:1"). O `fator` será o inverso da razão (ex: 10 para 1 -> fator = 0.1; 5 para 1 -> fator = 0.2).
+   - "conversao": quando um ticker mudar de código, for convertido ou incorporado por outro (ex: "IRDM11 virou IRIM11", "incorporação de ARCT11 para RBRR11").
+     * `ticker_origem`: ticker antigo (ex: IRDM11).
+     * `ticker_destino`: novo ticker (ex: IRIM11).
+     * `fator`: 1.0 se troca 1 para 1 (padrão quando não informado fator diferente), ou o fator de troca explícito.
+2. Tickers sempre em maiúsculas e no padrão B3 (ex: XPML11, MGLU3, IRDM11, IRIM11).
+3. `tipo_ativo`: "fii" para fundos imobiliários (final 11), "etf" para ETFs, "bdr" para final 34, "ação" para ações ordinárias/preferenciais.
+4. `data`: formato DD/MM/AAAA. Se o usuário disser "hoje" ou omitir a data, use a data atual nesse formato.
+"""
+
+
+def criar_agente_evento_corporativo(model: Optional[Union[str, FallbackModel, any]] = None) -> Agent[None, CorporateEventSchema]:
+    """
+    Cria o agente responsável por extrair eventos corporativos (split, inplit, conversão de ticker).
+    """
+    modelo_ativo = model or resolver_modelo_padrao()
+
+    agente = Agent(
+        modelo_ativo,
+        output_type=CorporateEventSchema,
+        system_prompt=PROMPT_EXTRATOR_EVENTO_CORPORATIVO,
+        retries=3
+    )
+
+    return agente
+
+
 # Instâncias padrão prontas para importação direta
 transaction_agent = criar_agente_transacao()
 assistant_agent = criar_agente_assistente()
 brokerage_note_agent = criar_agente_nota_corretagem()
+corporate_event_agent = criar_agente_evento_corporativo()

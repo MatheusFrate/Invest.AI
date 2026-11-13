@@ -8,14 +8,26 @@ import os
 import re
 import time
 import threading
+from datetime import datetime
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import messagebox, filedialog, simpledialog
 import customtkinter as ctk
 
 from invest_ai.ui.base_window import InvestApp
 from invest_ai.agent.deps import InvestContext
-from invest_ai.agent.agent import transaction_agent, assistant_agent, brokerage_note_agent, resolver_modelo_padrao
-from invest_ai.agent.schemas import TransactionSchema, BrokerageNoteSchema
+from invest_ai.agent.agent import (
+    transaction_agent,
+    assistant_agent,
+    brokerage_note_agent,
+    corporate_event_agent,
+    resolver_modelo_padrao,
+)
+from invest_ai.agent.schemas import (
+    TransactionSchema,
+    BrokerageNoteSchema,
+    CorporateEventSchema,
+    TipoEventoCorporativo,
+)
 from invest_ai.services.excel_handler import (
     DEFAULT_EXCEL_PATH,
     save_transaction_to_excel,
@@ -23,6 +35,7 @@ from invest_ai.services.excel_handler import (
     normalizar_todas_datas_planilha
 )
 from invest_ai.services.pdf_extractor import extrair_texto_pdf
+from invest_ai.services.irpf_exporter import exportar_guia_irpf_txt
 
 
 class InvestAIApp(InvestApp):
@@ -106,6 +119,17 @@ class InvestAIApp(InvestApp):
         )
         subtitle_lbl.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
+        self.btn_export_irpf = ctk.CTkButton(
+            header_frame,
+            text="💾 Exportar Guia IRPF (.txt)",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#059669",
+            hover_color="#047857",
+            height=38,
+            command=self._on_export_irpf_txt
+        )
+        self.btn_export_irpf.grid(row=0, column=1, rowspan=2, padx=(10, 0), sticky="e")
+
         self.btn_import_pdf = ctk.CTkButton(
             header_frame,
             text="📄 Importar Nota de Corretagem (PDF)",
@@ -115,7 +139,7 @@ class InvestAIApp(InvestApp):
             height=38,
             command=self._on_import_brokerage_note
         )
-        self.btn_import_pdf.grid(row=0, column=1, rowspan=2, padx=(10, 0), sticky="e")
+        self.btn_import_pdf.grid(row=0, column=2, rowspan=2, padx=(10, 0), sticky="e")
 
         self.chat_scroll = ctk.CTkScrollableFrame(frame, corner_radius=10, fg_color="#18181b")
         self.chat_scroll.grid(row=1, column=0, sticky="nsew", pady=(0, 15))
@@ -229,13 +253,33 @@ class InvestAIApp(InvestApp):
         card = ctk.CTkFrame(self.chat_scroll, fg_color="#1e1e24", corner_radius=10)
         card.pack(fill="x", padx=10, pady=6, anchor="w")
 
+        top_row = ctk.CTkFrame(card, fg_color="transparent")
+        top_row.pack(fill="x", padx=12, pady=(8, 2))
+
         lbl_bot = ctk.CTkLabel(
-            card,
+            top_row,
             text="🤖 Invest.AI",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#34d399"
         )
-        lbl_bot.pack(anchor="w", padx=12, pady=(8, 2))
+        lbl_bot.pack(side="left")
+
+        if len(texto_limpo) > 300:
+            btn_copy = ctk.CTkButton(
+                top_row,
+                text="📋 Copiar texto",
+                font=ctk.CTkFont(size=11),
+                fg_color="#27272a",
+                hover_color="#3f3f46",
+                text_color="#d4d4d8",
+                height=24,
+                width=110,
+                corner_radius=6,
+            )
+            btn_copy.configure(
+                command=lambda t=texto_limpo, b=btn_copy: self._copy_to_clipboard(t, b)
+            )
+            btn_copy.pack(side="right")
 
         lbl_msg = ctk.CTkLabel(
             card,
@@ -247,6 +291,16 @@ class InvestAIApp(InvestApp):
         lbl_msg.pack(anchor="w", padx=12, pady=(0, 8))
 
         self.chat_scroll.after(100, lambda: self.chat_scroll._parent_canvas.yview_moveto(1.0))
+
+    def _copy_to_clipboard(self, texto: str, button: ctk.CTkButton):
+        """Copia o texto da bolha para a área de transferência e exibe feedback breve."""
+        self.clipboard_clear()
+        self.clipboard_append(texto)
+        button.configure(text="✓ Copiado!")
+        self.after(
+            2000,
+            lambda: button.configure(text="📋 Copiar texto") if button.winfo_exists() else None,
+        )
 
     def _add_transaction_card(self, tx: TransactionSchema):
         """Adiciona card estruturado para confirmação de transação com Human-in-the-Loop."""
@@ -366,6 +420,105 @@ class InvestAIApp(InvestApp):
         except Exception as e:
             messagebox.showerror("Erro ao Salvar", f"Não foi possível gravar a operação:\n{e}")
 
+    def _add_corporate_event_card(self, ev: CorporateEventSchema):
+        """Adiciona card estruturado para confirmação de Evento Corporativo (Human-in-the-Loop)."""
+        card = ctk.CTkFrame(
+            self.chat_scroll,
+            fg_color="#1f2937",
+            border_color="#8b5cf6",
+            border_width=1,
+            corner_radius=12
+        )
+        card.pack(fill="x", padx=10, pady=8)
+
+        titulos = {
+            TipoEventoCorporativo.DESDOBRAMENTO: "DESDOBRAMENTO (SPLIT)",
+            TipoEventoCorporativo.AGRUPAMENTO: "AGRUPAMENTO (INPLIT)",
+            TipoEventoCorporativo.CONVERSAO: "CONVERSÃO / INCORPORAÇÃO DE TICKER",
+        }
+        lbl_title = ctk.CTkLabel(
+            card,
+            text=f"🔄 Evento Corporativo: {titulos.get(ev.tipo_evento, ev.tipo_evento.value.upper())}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#a78bfa"
+        )
+        lbl_title.pack(anchor="w", padx=15, pady=(12, 6))
+
+        if ev.tipo_evento == TipoEventoCorporativo.CONVERSAO:
+            alvo_txt = f"• Origem -> Destino: {ev.ticker_origem} -> {ev.ticker_destino} ({ev.tipo_ativo.value.upper()})"
+        else:
+            alvo_txt = f"• Ativo: {ev.ticker_origem} ({ev.tipo_ativo.value.upper()})"
+
+        detalhes = (
+            f"{alvo_txt}\n"
+            f"• Fator de Multiplicação: {ev.fator:g}x\n"
+            f"• Data do Evento: {ev.data}\n"
+            f"• Impacto Fiscal (DARF): Isento (custo total de aquisição preservado)"
+        )
+        if ev.observacao:
+            detalhes += f"\n• Observação: {ev.observacao}"
+
+        lbl_details = ctk.CTkLabel(
+            card,
+            text=detalhes,
+            font=ctk.CTkFont(size=13),
+            justify="left"
+        )
+        lbl_details.pack(anchor="w", padx=15, pady=(0, 10))
+
+        btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=15, pady=(0, 12))
+
+        btn_confirmar = ctk.CTkButton(
+            btn_frame,
+            text="✔ Confirmar e Gravar na Planilha",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#8b5cf6",
+            hover_color="#7c3aed",
+            height=32,
+            command=lambda c=card, e=ev: self._confirm_and_save_corporate_event(c, e)
+        )
+        btn_confirmar.pack(side="left", padx=(0, 10))
+
+        btn_descartar = ctk.CTkButton(
+            btn_frame,
+            text="✖ Cancelar",
+            font=ctk.CTkFont(size=12),
+            fg_color="#4b5563",
+            hover_color="#374151",
+            height=32,
+            command=lambda c=card: c.destroy()
+        )
+        btn_descartar.pack(side="left")
+
+        self.chat_scroll.after(100, lambda: self.chat_scroll._parent_canvas.yview_moveto(1.0))
+
+    def _confirm_and_save_corporate_event(self, card_widget, ev: CorporateEventSchema):
+        """Salva o evento corporativo confirmado pelo usuário no Excel e atualiza a carteira."""
+        try:
+            engine_tx = ev.to_engine_transaction()
+            foi_salvo = save_transaction_to_excel(engine_tx, DEFAULT_EXCEL_PATH, prevent_duplicates=True)
+
+            card_widget.destroy()
+
+            if not foi_salvo:
+                self._add_bot_message(
+                    f"⚠️ Evento corporativo NÃO gravado pois já existe um registro idêntico na planilha:\n\n"
+                    f"• {engine_tx.operacao.upper()} de {engine_tx.ticker} (fator {ev.fator:g}x) em {ev.data}."
+                )
+                return
+
+            self.load_data()
+            self.refresh_quotes_async()
+
+            self._add_bot_message(
+                f"OK! Evento corporativo registrado com sucesso!\n\n"
+                f"• {engine_tx.operacao.upper()}: {engine_tx.ticker} (Fator: {ev.fator:g}x | Data: {ev.data}).\n"
+                f"Sua custódia e preço médio já foram recalculados mantendo o custo total de aquisição."
+            )
+        except Exception as e:
+            messagebox.showerror("Erro ao Salvar", f"Não foi possível gravar o evento corporativo:\n{e}")
+
     def _add_batch_brokerage_note_card(self, nota: BrokerageNoteSchema):
         """Adiciona card estruturado para confirmação em lote de Nota de Corretagem (Human-in-the-Loop)."""
         card = ctk.CTkFrame(
@@ -403,6 +556,21 @@ class InvestAIApp(InvestApp):
             justify="left"
         )
         lbl_info.pack(anchor="w", pady=(4, 6))
+
+        if nota.total_custos_emolumentos > 0:
+            valor_fmt = f"{nota.total_custos_emolumentos:.2f}".replace(".", ",")
+            lbl_rateio = ctk.CTkLabel(
+                header_frame,
+                text=(
+                    f"Custos de R$ {valor_fmt} serão rateados proporcionalmente "
+                    f"(soma nas compras / deduz nas vendas conforme RFB)."
+                ),
+                font=ctk.CTkFont(size=11),
+                text_color="#fbbf24",
+                justify="left",
+                wraplength=520
+            )
+            lbl_rateio.pack(anchor="w", pady=(0, 6))
 
         # Tabela / Lista compacta com as operações encontradas
         ops_container = ctk.CTkFrame(card, fg_color="#0f172a", corner_radius=8)
@@ -476,7 +644,8 @@ class InvestAIApp(InvestApp):
     def _confirm_and_save_brokerage_note(self, card_widget, nota: BrokerageNoteSchema):
         """Salva as transações da nota de corretagem no Excel sem duplicar e atualiza a carteira."""
         try:
-            engine_txs = [tx.to_engine_transaction() for tx in nota.transacoes]
+            transacoes_rateadas = nota.aplicar_rateio_custos()
+            engine_txs = [tx.to_engine_transaction() for tx in transacoes_rateadas]
             salvas, ignoradas = save_transactions_batch_to_excel(
                 engine_txs,
                 DEFAULT_EXCEL_PATH,
@@ -491,14 +660,14 @@ class InvestAIApp(InvestApp):
             if salvas == 0:
                 self._add_bot_message(
                     f"ℹ️ Nenhuma nova operação foi gravada:\n\n"
-                    f"Todas as {len(nota.transacoes)} operações desta nota (Pregão: {nota.data_pregao}) "
+                    f"Todas as {len(transacoes_rateadas)} operações desta nota (Pregão: {nota.data_pregao}) "
                     f"já constavam na planilha. A duplicação de dados foi evitada!"
                 )
                 return
 
             resumo_linhas = "\n".join(
                 f"• [{t.operacao.value.upper()}] {t.quantidade:g} {t.ticker} @ R$ {t.valor_unitario:.2f}"
-                for t in nota.transacoes
+                for t in transacoes_rateadas
             )
             msg_sucesso = (
                 f"OK! Nota de corretagem processada com sucesso!\n\n"
@@ -541,16 +710,32 @@ class InvestAIApp(InvestApp):
 
     def _process_ai_thread(self, prompt: str):
         try:
+            prompt_lower = prompt.lower()
+            palavras_evento = [
+                "desdobramento", "split", "agrupamento", "inplit",
+                "virou", "converteu", "conversão", "conversao",
+                "incorporou", "mudou para", "incorporação", "incorporacao"
+            ]
+            is_evento_corporativo = any(p in prompt_lower for p in palavras_evento)
+
             palavras_transacao = ["comprei", "vendi", "compra", "venda", "aporte", "adicionar"]
-            primeira_palavra = prompt.lower().split()[0] if prompt.split() else ""
-            is_transacao = primeira_palavra in palavras_transacao or any(prompt.lower().startswith(p) for p in palavras_transacao)
+            primeira_palavra = prompt_lower.split()[0] if prompt_lower.split() else ""
+            is_transacao = (
+                not is_evento_corporativo
+                and (primeira_palavra in palavras_transacao or any(prompt_lower.startswith(p) for p in palavras_transacao))
+            )
 
             max_tentativas = 2
             ultimo_erro = None
 
             for tentativa in range(max_tentativas):
                 try:
-                    if is_transacao:
+                    if is_evento_corporativo:
+                        res = corporate_event_agent.run_sync(prompt)
+                        ev_schema: CorporateEventSchema = res.output
+                        self.after(0, lambda: self._add_corporate_event_card(ev_schema))
+                        return
+                    elif is_transacao:
                         res = transaction_agent.run_sync(prompt, deps=self.ai_context)
                         tx_schema: TransactionSchema = res.output
                         self.after(0, lambda: self._add_transaction_card(tx_schema))
@@ -653,6 +838,65 @@ class InvestAIApp(InvestApp):
                     text="📄 Importar Nota de Corretagem (PDF)"
                 )
             )
+
+    def _on_export_irpf_txt(self):
+        """Solicita o ano-calendário e o destino do arquivo .txt para exportar o Guia IRPF."""
+        ano = simpledialog.askinteger(
+            "Exportar Guia IRPF (.txt)",
+            "Informe o ano-calendário da declaração:",
+            initialvalue=datetime.now().year - 1,
+            minvalue=2015,
+            maxvalue=2035,
+            parent=self,
+        )
+        if ano is None:
+            return
+
+        caminho_arquivo = filedialog.asksaveasfilename(
+            title=f"Salvar Guia IRPF {ano}",
+            defaultextension=".txt",
+            initialfile=f"guia_irpf_{ano}.txt",
+            filetypes=[("Arquivos de Texto (*.txt)", "*.txt"), ("Todos os arquivos", "*.*")],
+        )
+        if not caminho_arquivo:
+            return
+
+        self.btn_export_irpf.configure(state="disabled", text="Exportando...")
+        threading.Thread(
+            target=self._export_irpf_thread,
+            args=(ano, caminho_arquivo),
+            daemon=True,
+        ).start()
+
+    def _export_irpf_thread(self, ano: int, caminho_arquivo: str):
+        """Thread em background para gerar e gravar o Guia IRPF em arquivo texto UTF-8."""
+        try:
+            salvo_em = exportar_guia_irpf_txt(self.ai_context, ano, caminho_arquivo)
+            self.after(
+                0,
+                lambda: self._on_export_irpf_success(ano, salvo_em),
+            )
+        except Exception as e:
+            err_msg = f"❌ Erro ao exportar Guia IRPF {ano}:\n{e}"
+            self.after(0, lambda: self._on_export_irpf_error(err_msg))
+        finally:
+            self.after(
+                0,
+                lambda: self.btn_export_irpf.configure(
+                    state="normal",
+                    text="💾 Exportar Guia IRPF (.txt)",
+                ),
+            )
+
+    def _on_export_irpf_success(self, ano: int, salvo_em: str):
+        """Notifica no chat e via diálogo após exportar o Guia IRPF."""
+        self._add_bot_message(f"✅ Guia IRPF {ano} exportado com sucesso para:\n{salvo_em}")
+        messagebox.showinfo("Guia IRPF Exportado", f"Arquivo salvo com sucesso em:\n{salvo_em}")
+
+    def _on_export_irpf_error(self, err_msg: str):
+        """Notifica erro no chat e via diálogo caso a exportação falhe."""
+        self._add_bot_message(err_msg)
+        messagebox.showerror("Erro na Exportação", err_msg)
 
 
 if __name__ == "__main__":

@@ -15,8 +15,8 @@ class Transaction:
     id: Optional[int] = None
     data: str = ""  # YYYY-MM-DD ou DD/MM/YYYY
     ticker: str = ""
-    tipo_ativo: str = "fii"  # 'fii', 'ação', 'etf'
-    operacao: str = "compra"  # 'compra' ou 'venda'
+    tipo_ativo: str = "fii"  # 'fii', 'ação', 'etf', 'bdr'
+    operacao: str = "compra"  # 'compra', 'venda', 'desdobramento', 'agrupamento', 'conversao'
     quantidade: float = 0.0
     valor_total: float = 0.0
     valor_unitario: float = 0.0
@@ -67,6 +67,58 @@ class InvestmentEngine:
     def set_transactions(self, txs: List[Transaction]):
         self.transactions = txs
 
+    @staticmethod
+    def _apply_corporate_event(wallet: Dict[str, Dict], tx: Transaction) -> None:
+        """
+        Aplica eventos corporativos (desdobramento, agrupamento, conversao) no estado da carteira
+        preservando integralmente o custo total de aquisição e sem gerar alienação/DARF.
+        """
+        if tx.operacao in ("desdobramento", "agrupamento"):
+            fator = tx.quantidade
+            if fator <= 0:
+                return
+            item = wallet.get(tx.ticker)
+            if item and item["quantidade"] > 0:
+                item["quantidade"] *= fator
+                item["preco_medio"] = (
+                    item["custo_total"] / item["quantidade"]
+                    if item["quantidade"] > 0
+                    else 0.0
+                )
+        elif tx.operacao == "conversao":
+            if "->" not in tx.ticker:
+                return
+            origem, destino = [part.strip().upper() for part in tx.ticker.split("->", 1)]
+            if not origem or not destino:
+                return
+            fator = tx.quantidade if tx.quantidade > 0 else 1.0
+            orig_item = wallet.get(origem)
+            if not orig_item or orig_item["quantidade"] <= 0:
+                return
+
+            qtd_origem = orig_item["quantidade"]
+            custo_origem = orig_item["custo_total"]
+            tipo_origem = orig_item.get("tipo_ativo") or tx.tipo_ativo
+
+            orig_item["quantidade"] = 0.0
+            orig_item["custo_total"] = 0.0
+            orig_item["preco_medio"] = 0.0
+
+            if destino not in wallet:
+                wallet[destino] = {
+                    "quantidade": 0.0,
+                    "custo_total": 0.0,
+                    "preco_medio": 0.0,
+                    "tipo_ativo": tx.tipo_ativo or tipo_origem,
+                }
+
+            dest_item = wallet[destino]
+            dest_item["quantidade"] += qtd_origem * fator
+            dest_item["custo_total"] += custo_origem
+            if dest_item["quantidade"] > 0:
+                dest_item["preco_medio"] = dest_item["custo_total"] / dest_item["quantidade"]
+            dest_item["tipo_ativo"] = tx.tipo_ativo or tipo_origem
+
     def calculate(self):
         """
         Calcula a carteira atual (preço médio e quantidade),
@@ -78,6 +130,10 @@ class InvestmentEngine:
         sales: List[SaleResult] = []
 
         for idx, tx in enumerate(self.transactions):
+            if tx.operacao in ("desdobramento", "agrupamento", "conversao"):
+                self._apply_corporate_event(wallet, tx)
+                continue
+
             ticker = tx.ticker
             if ticker not in wallet:
                 wallet[ticker] = {
@@ -181,9 +237,10 @@ class InvestmentEngine:
         prejuizo_acumulado_fii = 0.0
         prejuizo_acumulado_acao = 0.0
         prejuizo_acumulado_etf = 0.0
+        prejuizo_acumulado_bdr = 0.0
 
         for mes in meses_unicos:
-            for tipo in ['fii', 'ação', 'etf']:
+            for tipo in ['fii', 'ação', 'etf', 'bdr']:
                 subset = df_sales[(df_sales['mes_ano'] == mes) & (df_sales['tipo_ativo'] == tipo)]
                 if subset.empty:
                     continue
@@ -204,8 +261,11 @@ class InvestmentEngine:
                 elif tipo == 'ação':
                     prejuizo_acum = prejuizo_acumulado_acao
                     aliquota = 0.15
-                else:  # etf
+                elif tipo == 'etf':
                     prejuizo_acum = prejuizo_acumulado_etf
+                    aliquota = 0.15
+                else:  # bdr
+                    prejuizo_acum = prejuizo_acumulado_bdr
                     aliquota = 0.15
 
                 rep.aliquota = aliquota
@@ -246,8 +306,10 @@ class InvestmentEngine:
                     prejuizo_acumulado_fii = prejuizo_acum
                 elif tipo == 'ação':
                     prejuizo_acumulado_acao = prejuizo_acum
-                else:
+                elif tipo == 'etf':
                     prejuizo_acumulado_etf = prejuizo_acum
+                else:
+                    prejuizo_acumulado_bdr = prejuizo_acum
 
                 reports.append(rep)
 
@@ -326,6 +388,10 @@ class InvestmentEngine:
                 wallet_anterior = {
                     t: dict(d) for t, d in wallet.items()
                 }
+
+            if tx.operacao in ("desdobramento", "agrupamento", "conversao"):
+                self._apply_corporate_event(wallet, tx)
+                continue
 
             ticker = tx.ticker
             if ticker not in wallet:
@@ -414,7 +480,7 @@ class InvestmentEngine:
 
         # Apuração de Renda Variável acumulada até 31/12/{ano}
         tax_reports = self._calculate_taxes(sales_ate_ano)
-        prejuizo_final = {"acao": 0.0, "fii": 0.0, "etf": 0.0}
+        prejuizo_final = {"acao": 0.0, "fii": 0.0, "etf": 0.0, "bdr": 0.0}
         meses_ano: Dict[str, Dict] = {}
         sufixo_ano = f"/{ano}"
 
@@ -425,6 +491,8 @@ class InvestmentEngine:
                 prejuizo_final["fii"] = round(rep.prejuizo_restante_acumulado, 2)
             elif rep.tipo_ativo == "etf":
                 prejuizo_final["etf"] = round(rep.prejuizo_restante_acumulado, 2)
+            elif rep.tipo_ativo == "bdr":
+                prejuizo_final["bdr"] = round(rep.prejuizo_restante_acumulado, 2)
 
             if not rep.mes_ano.endswith(sufixo_ano):
                 continue
@@ -442,6 +510,9 @@ class InvestmentEngine:
                     "vendas_etfs": 0.0,
                     "resultado_etfs": 0.0,
                     "darf_etfs": 0.0,
+                    "vendas_bdrs": 0.0,
+                    "resultado_bdrs": 0.0,
+                    "darf_bdrs": 0.0,
                     "darf_total": 0.0,
                 }
 
@@ -460,9 +531,13 @@ class InvestmentEngine:
                 entry["vendas_etfs"] = round(rep.vendas_total, 2)
                 entry["resultado_etfs"] = round(rep.resultado_liquido, 2)
                 entry["darf_etfs"] = round(rep.imposto_devido, 2)
+            elif rep.tipo_ativo == "bdr":
+                entry["vendas_bdrs"] = round(rep.vendas_total, 2)
+                entry["resultado_bdrs"] = round(rep.resultado_liquido, 2)
+                entry["darf_bdrs"] = round(rep.imposto_devido, 2)
 
             entry["darf_total"] = round(
-                entry["darf_acoes"] + entry["darf_fiis"] + entry["darf_etfs"], 2
+                entry["darf_acoes"] + entry["darf_fiis"] + entry["darf_etfs"] + entry["darf_bdrs"], 2
             )
 
         return {

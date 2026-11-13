@@ -2,13 +2,15 @@
 Testes das ferramentas (Tools) acopladas ao PydanticAI.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+from invest_ai.agent.deps import InvestContext
 from invest_ai.agent.tools import (
     obter_cotacao_b3,
     consultar_posicao_carteira,
     listar_resumo_carteira,
     simular_impacto_darf
 )
+from invest_ai.core.engine import Transaction
 
 
 def test_obter_cotacao_b3():
@@ -77,3 +79,60 @@ def test_simular_venda_quantidade_maior_que_posse(mock_run_context):
     res = simular_impacto_darf(mock_run_context, ticker="PETR4", quantidade=200, preco_venda=35.0)
     assert res["sucesso"] is False
     assert "possui apenas 100" in res["mensagem"]
+
+
+def test_simular_darf_bdr_sem_isencao_e_com_prejuizo_acumulado():
+    # 1) BDR com lucro e venda <= R$ 20k: aplica 15% sem isenção
+    ctx = InvestContext(excel_path="mock_bdr.xlsx")
+    ctx.engine.set_transactions([
+        Transaction(
+            data="2026-01-10",
+            ticker="AAPL34",
+            tipo_ativo="bdr",
+            operacao="compra",
+            quantidade=100.0,
+            valor_unitario=50.0,
+            valor_total=5000.0,
+        )
+    ])
+    ctx._carteira_carregada = True
+    run_ctx = MagicMock()
+    run_ctx.deps = ctx
+
+    res = simular_impacto_darf(run_ctx, ticker="AAPL34", quantidade=50, preco_venda=70.0)
+    assert res["sucesso"] is True
+    assert res["tipo_ativo"] == "bdr"
+    assert res["valor_total_venda"] == 3500.0
+    assert res["lucro_prejuizo_total"] == 1000.0
+    assert res["isento"] is False
+    assert res["aliquota_ir_pct"] == 15.0
+    assert res["imposto_devido"] == 150.0
+
+    # 2) BDR com prejuízo acumulado prévio de R$ 400 -> abate do lucro de R$ 1.000 -> base R$ 600 -> 15% = R$ 90
+    ctx.engine.set_transactions([
+        Transaction(
+            data="2026-01-10",
+            ticker="AAPL34",
+            tipo_ativo="bdr",
+            operacao="compra",
+            quantidade=140.0,
+            valor_unitario=50.0,
+            valor_total=7000.0,
+        ),
+        Transaction(
+            data="2026-01-20",
+            ticker="AAPL34",
+            tipo_ativo="bdr",
+            operacao="venda",
+            quantidade=40.0,
+            valor_unitario=40.0,
+            valor_total=1600.0,
+        ),
+    ])
+    res_comp = simular_impacto_darf(run_ctx, ticker="AAPL34", quantidade=50, preco_venda=70.0)
+    assert res_comp["sucesso"] is True
+    assert res_comp["lucro_prejuizo_total"] == 1000.0
+    assert res_comp["prejuizo_compensado"] == 400.0
+    assert res_comp["aliquota_ir_pct"] == 15.0
+    assert res_comp["imposto_devido"] == 90.0
+    assert res_comp["isento"] is False
