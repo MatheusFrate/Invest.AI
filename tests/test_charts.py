@@ -13,6 +13,9 @@ from invest_ai.ui.charts import (
     create_allocation_by_class_figure,
     create_allocation_by_ticker_figure,
     create_monthly_dividends_figure,
+    create_profitability_by_ticker_figure,
+    create_sales_darf_summary_figure,
+    attach_matplotlib_tooltip,
 )
 
 
@@ -132,3 +135,87 @@ def test_attach_tree_scrollbars_configures_x_and_y_scroll(monkeypatch):
     tree.grid.assert_called_once_with(row=0, column=0, sticky="nsew")
     y_sb.grid.assert_called_once_with(row=0, column=1, sticky="ns")
     x_sb.grid.assert_called_once_with(row=1, column=0, sticky="ew")
+
+
+def test_create_profitability_by_ticker_figure_positivo_negativo_e_vazio():
+    wallet = {
+        "MXRF11": {"quantidade": 100.0, "total_investido": 1000.0, "tipo_ativo": "fii"},
+        "PETR4": {"quantidade": 10.0, "total_investido": 400.0, "tipo_ativo": "ação"},
+    }
+    live_quotes = {
+        "MXRF11": {"price": 11.0},  # +10%
+        "PETR4": {"price": 32.0},   # -20%
+    }
+
+    fig = create_profitability_by_ticker_figure(wallet, live_quotes)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Rentabilidade por Ativo (%)"
+    y_labels = [lbl.get_text() for lbl in ax.get_yticklabels()]
+    assert y_labels == ["PETR4", "MXRF11"]
+    widths = [rect.get_width() for rect in ax.patches]
+    assert widths == pytest.approx([-20.0, 10.0])
+
+    # Caso vazio
+    fig_vazia = create_profitability_by_ticker_figure({})
+    ax_vazia = fig_vazia.axes[0]
+    assert any("Sem ativos em custódia" in t.get_text() for t in ax_vazia.texts)
+
+
+def test_create_sales_darf_summary_figure_com_dados_e_vazio():
+    from invest_ai.core.engine import MonthlyTaxReport
+
+    reports = [
+        MonthlyTaxReport(
+            mes_ano="07/2026",
+            tipo_ativo="fii",
+            vendas_total=500.0,
+            resultado_liquido=-50.0,
+            prejuizo_anterior_compensado=0.0,
+            base_calculo=0.0,
+            imposto_devido=0.0,
+            prejuizo_restante_acumulado=50.0,
+            isento=False,
+        ),
+        MonthlyTaxReport(
+            mes_ano="10/2026",
+            tipo_ativo="fii",
+            vendas_total=1200.0,
+            resultado_liquido=200.0,
+            prejuizo_anterior_compensado=50.0,
+            base_calculo=150.0,
+            imposto_devido=30.0,
+            prejuizo_restante_acumulado=0.0,
+            isento=False,
+        ),
+    ]
+
+    fig = create_sales_darf_summary_figure(reports)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Resumo Mensal: Resultado vs. DARF (R$)"
+    x_labels = [lbl.get_text() for lbl in ax.get_xticklabels()]
+    assert x_labels == ["07/2026", "10/2026"]
+    # 2 barras por mês (Resultado e DARF) = 4 patches
+    assert len(ax.patches) == 4
+
+    # Caso vazio
+    fig_vazio = create_sales_darf_summary_figure([])
+    ax_vazio = fig_vazio.axes[0]
+    assert any("Sem vendas apuradas" in t.get_text() for t in ax_vazio.texts)
+
+
+def test_attach_matplotlib_tooltip_registra_evento():
+    from unittest.mock import MagicMock
+
+    wallet = {"MXRF11": {"quantidade": 10.0, "total_investido": 100.0, "tipo_ativo": "fii"}}
+    fig = create_allocation_by_ticker_figure(wallet)
+    canvas = MagicMock()
+    canvas.mpl_connect.return_value = 42
+
+    cid = attach_matplotlib_tooltip(canvas, fig)
+    assert cid == 42
+    canvas.mpl_connect.assert_called_once()
+    args, _ = canvas.mpl_connect.call_args
+    assert args[0] == "motion_notify_event"
+    assert callable(args[1])

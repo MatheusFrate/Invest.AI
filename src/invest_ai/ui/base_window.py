@@ -19,6 +19,9 @@ from invest_ai.ui.charts import (
     create_allocation_by_class_figure,
     create_allocation_by_ticker_figure,
     create_monthly_dividends_figure,
+    create_profitability_by_ticker_figure,
+    create_sales_darf_summary_figure,
+    attach_matplotlib_tooltip,
 )
 from invest_ai.services.excel_handler import (
     load_transactions_from_excel, 
@@ -50,10 +53,19 @@ class InvestApp(ctk.CTk):
         self.dividends_data = {}  # Cache de proventos B3 {ticker: [{...}, ...]}
         self.is_fetching_dividends = False
         self.charts_visible = True
+        self.carteira_chart_mode = "Alocação"
+        self.vendas_chart_visible = False
         self._chart_figures = {}
         self._last_wallet = {}
+        self._last_calc_res = {"wallet": {}, "tax_reports": [], "sales": []}
+        self._last_dividends_calc = ([], {})
 
-        # Variáveis de filtro e ordenação do extrato
+        # Variáveis de filtro e ordenação das tabelas
+        self.carteira_filter_tipo = "Todos"
+        self.carteira_sort_col = "ticker"
+        self.carteira_sort_reverse = False
+        self.vendas_filter_ano = "Todos"
+        self.proventos_filter_ano = "Todos"
         self.historico_sort_col = "id"
         self.historico_sort_reverse = False
         self.historico_filter_text = ""
@@ -61,6 +73,7 @@ class InvestApp(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
+        self._configure_treeview_dark_style()
         self._build_sidebar()
         self._build_main_panel()
 
@@ -69,10 +82,60 @@ class InvestApp(ctk.CTk):
         self.after(500, self.refresh_quotes_async)
         self.after(1000, self.refresh_dividends_async)
 
+    def _configure_treeview_dark_style(self) -> None:
+        """Configura tema escuro ('clam') para ttk.Treeview e ttk.Scrollbar."""
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        style.configure(
+            "Treeview",
+            background="#232323",
+            foreground="#e5e7eb",
+            fieldbackground="#232323",
+            borderwidth=0,
+            rowheight=26,
+            font=("Segoe UI", 10),
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", "#1f538d")],
+            foreground=[("selected", "#ffffff")],
+        )
+        style.configure(
+            "Treeview.Heading",
+            background="#1f2937",
+            foreground="#f3f4f6",
+            relief="flat",
+            borderwidth=1,
+            font=("Segoe UI", 10, "bold"),
+        )
+        style.map(
+            "Treeview.Heading",
+            background=[("active", "#374151")],
+            foreground=[("active", "#ffffff")],
+        )
+        style.configure(
+            "Vertical.TScrollbar",
+            background="#374151",
+            troughcolor="#1f2937",
+            bordercolor="#1f2937",
+            arrowcolor="#9ca3af",
+        )
+        style.configure(
+            "Horizontal.TScrollbar",
+            background="#374151",
+            troughcolor="#1f2937",
+            bordercolor="#1f2937",
+            arrowcolor="#9ca3af",
+        )
+
     def _build_sidebar(self):
         self.sidebar_frame = ctk.CTkFrame(self, width=220, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
-        self.sidebar_frame.grid_rowconfigure(5, weight=1)
+        self.sidebar_frame.grid_rowconfigure(7, weight=1)
 
         logo_label = ctk.CTkLabel(
             self.sidebar_frame, 
@@ -117,20 +180,28 @@ class InvestApp(ctk.CTk):
         )
         self.btn_nav_historico.grid(row=5, column=0, padx=20, pady=8, sticky="ew")
 
+        self.lbl_sync_status = ctk.CTkLabel(
+            self.sidebar_frame,
+            text="✅ Dados prontos",
+            text_color="#9ca3af",
+            font=ctk.CTkFont(size=11)
+        )
+        self.lbl_sync_status.grid(row=8, column=0, padx=20, pady=(10, 2))
+
         lbl_status = ctk.CTkLabel(
             self.sidebar_frame, 
             text="Planilha:\ninvestimento.xlsx", 
             text_color="gray70", 
             font=ctk.CTkFont(size=11)
         )
-        lbl_status.grid(row=7, column=0, padx=20, pady=(10, 5))
+        lbl_status.grid(row=9, column=0, padx=20, pady=(4, 5))
 
         btn_reload = ctk.CTkButton(
             self.sidebar_frame, text="🔄 Recarregar Dados", 
             command=self.load_data, height=32, 
             fg_color="#333333", hover_color="#444444"
         )
-        btn_reload.grid(row=8, column=0, padx=20, pady=(5, 20), sticky="ew")
+        btn_reload.grid(row=10, column=0, padx=20, pady=(5, 20), sticky="ew")
 
     def _build_main_panel(self):
         self.main_container = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -166,6 +237,70 @@ class InvestApp(ctk.CTk):
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
 
+    def _setup_tree_tags_and_context_menu(
+        self, tree: ttk.Treeview, ticker_col_idx: int | None = None, allow_crud: bool = False
+    ) -> None:
+        """Configura tags de zebra/semântica e menu de contexto (botão direito) no Treeview."""
+        tree.tag_configure("even", background="#232323")
+        tree.tag_configure("odd", background="#2a2a2e")
+        tree.tag_configure("profit", foreground="#34d399")
+        tree.tag_configure("loss", foreground="#f87171")
+        tree.tag_configure("warning", foreground="#fbbf24")
+        self._bind_tree_context_menu(tree, ticker_col_idx=ticker_col_idx, allow_crud=allow_crud)
+
+    def _bind_tree_context_menu(
+        self, tree: ttk.Treeview, ticker_col_idx: int | None = None, allow_crud: bool = False
+    ) -> None:
+        """Associa menu de contexto com cópia e ações de edição/exclusão ao botão direito."""
+        menu = tk.Menu(
+            tree,
+            tearoff=0,
+            bg="#1f2937",
+            fg="#f3f4f6",
+            activebackground="#1f538d",
+            activeforeground="#ffffff",
+            bd=0,
+        )
+
+        def _copy_text(texto: str):
+            self.clipboard_clear()
+            self.clipboard_append(texto)
+
+        def _on_right_click(event):
+            row_id = tree.identify_row(event.y)
+            if not row_id:
+                return
+            tree.selection_set(row_id)
+            vals = tree.item(row_id, "values") or ()
+            menu.delete(0, "end")
+
+            if ticker_col_idx is not None and 0 <= ticker_col_idx < len(vals):
+                ticker_val = str(vals[ticker_col_idx]).strip()
+                if ticker_val:
+                    menu.add_command(
+                        label=f"📋 Copiar Ticker ({ticker_val})",
+                        command=lambda t=ticker_val: _copy_text(t),
+                    )
+
+            if vals:
+                linha_txt = " | ".join(str(v) for v in vals)
+                menu.add_command(
+                    label="📋 Copiar Linha",
+                    command=lambda s=linha_txt: _copy_text(s),
+                )
+
+            if allow_crud:
+                menu.add_separator()
+                menu.add_command(label="✏️ Editar Operação", command=self.edit_selected_operation)
+                menu.add_command(label="🗑️ Excluir Operação", command=self.delete_selected_operation)
+
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        tree.bind("<Button-3>", _on_right_click)
+
     # -------------------------------------------------------------
     # VIEW: CARTEIRA ATUAL
     # -------------------------------------------------------------
@@ -173,9 +308,10 @@ class InvestApp(ctk.CTk):
         frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(2, weight=0)
-        frame.grid_rowconfigure(3, weight=1)
+        frame.grid_rowconfigure(3, weight=0)
+        frame.grid_rowconfigure(4, weight=1)
 
-        # Cabeçalho com Título e Botão de Atualizar Cotações B3
+        # Cabeçalho com Título, Seletor de Gráfico e Botão de Atualizar Cotações B3
         header_frame = ctk.CTkFrame(frame, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         header_frame.grid_columnconfigure(0, weight=1)
@@ -186,13 +322,23 @@ class InvestApp(ctk.CTk):
         )
         title.grid(row=0, column=0, sticky="w")
 
+        self.seg_carteira_chart_mode = ctk.CTkSegmentedButton(
+            header_frame,
+            values=["Alocação", "Rentabilidade"],
+            command=self._on_carteira_chart_mode_changed,
+            height=34,
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        self.seg_carteira_chart_mode.set("Alocação")
+        self.seg_carteira_chart_mode.grid(row=0, column=1, sticky="e", padx=(0, 8))
+
         self.btn_toggle_charts = ctk.CTkButton(
             header_frame, text="📊 Ocultar Gráficos",
             command=self._toggle_carteira_charts,
             height=34, font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#374151", hover_color="#4b5563"
         )
-        self.btn_toggle_charts.grid(row=0, column=1, sticky="e", padx=(0, 8))
+        self.btn_toggle_charts.grid(row=0, column=2, sticky="e", padx=(0, 8))
 
         self.btn_refresh_quotes = ctk.CTkButton(
             header_frame, text="📡 Atualizar Cotações B3", 
@@ -200,7 +346,7 @@ class InvestApp(ctk.CTk):
             height=34, font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#1f538d", hover_color="#14375e"
         )
-        self.btn_refresh_quotes.grid(row=0, column=2, sticky="e")
+        self.btn_refresh_quotes.grid(row=0, column=3, sticky="e")
 
         # Cards de Resumo Expandidos (Total Investido, Patrimônio Atual, Lucro/Prejuízo Total, Prejuízo a Compensar)
         cards_frame = ctk.CTkFrame(frame)
@@ -212,9 +358,9 @@ class InvestApp(ctk.CTk):
         self.card_lucro_total = self._create_stat_card(cards_frame, 2, "Lucro / Prejuízo Total", "R$ 0,00", "#2d4a22")
         self.card_prejuizo_acum = self._create_stat_card(cards_frame, 3, "Prejuízo a Compensar (IR)", "R$ 0,00", "#b35900")
 
-        # Gráficos da Carteira (Rosca por Classe + Barras por Ativo)
+        # Gráficos da Carteira (Rosca por Classe + Barras por Ativo / Rentabilidade)
         self.carteira_charts_frame = ctk.CTkFrame(frame, height=230)
-        self.carteira_charts_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        self.carteira_charts_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         self.carteira_charts_frame.grid_propagate(False)
         self.carteira_charts_frame.grid_columnconfigure((0, 1), weight=1)
         self.carteira_charts_frame.grid_rowconfigure(0, weight=1)
@@ -229,22 +375,57 @@ class InvestApp(ctk.CTk):
         )
         self.chart_ticker_container.grid(row=0, column=1, sticky="nsew", padx=(4, 6), pady=6)
 
+        # Barra de Filtro Rápido por Classe de Ativo
+        filter_bar = ctk.CTkFrame(frame, fg_color="transparent")
+        filter_bar.grid(row=3, column=0, sticky="ew", pady=(0, 6))
+        filter_bar.grid_columnconfigure(1, weight=1)
+
+        lbl_filtro_c = ctk.CTkLabel(filter_bar, text="Filtrar classe:", font=ctk.CTkFont(size=12, weight="bold"))
+        lbl_filtro_c.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        self.seg_filtro_carteira_tipo = ctk.CTkSegmentedButton(
+            filter_bar,
+            values=["Todos", "FII", "AÇÃO", "ETF", "BDR"],
+            command=self._on_carteira_tipo_filter_changed,
+            height=28,
+            font=ctk.CTkFont(size=12),
+        )
+        self.seg_filtro_carteira_tipo.set("Todos")
+        self.seg_filtro_carteira_tipo.grid(row=0, column=1, sticky="w")
+
+        lbl_dica_c = ctk.CTkLabel(
+            filter_bar,
+            text="💡 Clique no cabeçalho para ordenar • Botão direito para copiar",
+            text_color="gray70",
+            font=ctk.CTkFont(size=11),
+        )
+        lbl_dica_c.grid(row=0, column=2, sticky="e")
+
         tbl_container = ctk.CTkFrame(frame)
-        tbl_container.grid(row=3, column=0, sticky="nsew")
+        tbl_container.grid(row=4, column=0, sticky="nsew")
         tbl_container.grid_rowconfigure(0, weight=1)
         tbl_container.grid_columnconfigure(0, weight=1)
 
         cols = ("ticker", "tipo", "quantidade", "preco_medio", "preco_atual", "total_investido", "patrimonio_atual", "lucro_prej", "rentabilidade")
         self.tree_carteira = ttk.Treeview(tbl_container, columns=cols, show="headings", selectmode="browse", height=8)
-        self.tree_carteira.heading("ticker", text="Ativo / Cota")
-        self.tree_carteira.heading("tipo", text="Tipo")
-        self.tree_carteira.heading("quantidade", text="Qtd")
-        self.tree_carteira.heading("preco_medio", text="Preço Médio (PM)")
-        self.tree_carteira.heading("preco_atual", text="Preço Atual (B3)")
-        self.tree_carteira.heading("total_investido", text="Total Investido")
-        self.tree_carteira.heading("patrimonio_atual", text="Patrimônio Atual")
-        self.tree_carteira.heading("lucro_prej", text="Lucro/Prejuízo")
-        self.tree_carteira.heading("rentabilidade", text="Rentab. (%)")
+        carteira_headings = {
+            "ticker": "Ativo / Cota",
+            "tipo": "Tipo",
+            "quantidade": "Qtd",
+            "preco_medio": "Preço Médio (PM)",
+            "preco_atual": "Preço Atual (B3)",
+            "total_investido": "Total Investido",
+            "patrimonio_atual": "Patrimônio Atual",
+            "lucro_prej": "Lucro/Prejuízo",
+            "rentabilidade": "Rentab. (%)",
+        }
+        for col_id, col_title in carteira_headings.items():
+            suf = " ▲" if col_id == "ticker" else " ↕"
+            self.tree_carteira.heading(
+                col_id,
+                text=f"{col_title}{suf}",
+                command=lambda c=col_id: self._sort_carteira(c),
+            )
 
         self.tree_carteira.column("ticker", width=95, minwidth=85, anchor="center")
         self.tree_carteira.column("tipo", width=75, minwidth=65, anchor="center")
@@ -257,6 +438,7 @@ class InvestApp(ctk.CTk):
         self.tree_carteira.column("rentabilidade", width=105, minwidth=95, anchor="e")
 
         self._attach_tree_scrollbars(tbl_container, self.tree_carteira)
+        self._setup_tree_tags_and_context_menu(self.tree_carteira, ticker_col_idx=0)
 
         return frame
 
@@ -266,8 +448,9 @@ class InvestApp(ctk.CTk):
     def _create_vendas_view(self):
         frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(3, weight=1)
-        frame.grid_rowconfigure(5, weight=2)
+        frame.grid_rowconfigure(3, weight=0)
+        frame.grid_rowconfigure(4, weight=1)
+        frame.grid_rowconfigure(6, weight=2)
 
         title = ctk.CTkLabel(
             frame, text="Apuração de Vendas & Cálculo de DARF", 
@@ -276,7 +459,7 @@ class InvestApp(ctk.CTk):
         title.grid(row=0, column=0, sticky="w", pady=(0, 10))
 
         info_frame = ctk.CTkFrame(frame, fg_color="#1c2430", corner_radius=8)
-        info_frame.grid(row=1, column=0, sticky="ew", pady=(0, 15), padx=2)
+        info_frame.grid(row=1, column=0, sticky="ew", pady=(0, 12), padx=2)
         info_lbl = ctk.CTkLabel(
             info_frame, 
             text="📌 Regra dos FIIs: Alíquota de 20% sobre o lucro líquido. Venda com prejuízo acumula saldo para abater dos lucros futuros.\n"
@@ -285,7 +468,7 @@ class InvestApp(ctk.CTk):
         )
         info_lbl.pack(padx=15, pady=10, anchor="w")
 
-        # Subcabeçalho com Título e Botão de Marcar DARF Pago
+        # Subcabeçalho com Título, Filtro de Ano, Botão de Gráfico e Botão de Marcar DARF Pago
         sub1_box = ctk.CTkFrame(frame, fg_color="transparent")
         sub1_box.grid(row=2, column=0, sticky="ew", pady=(5, 5))
         sub1_box.grid_columnconfigure(0, weight=1)
@@ -293,16 +476,46 @@ class InvestApp(ctk.CTk):
         lbl_sub1 = ctk.CTkLabel(sub1_box, text="📅 Resumo Fiscal por Período / Mês", font=ctk.CTkFont(size=15, weight="bold"))
         lbl_sub1.grid(row=0, column=0, sticky="w")
 
+        lbl_ano_v = ctk.CTkLabel(sub1_box, text="Ano:", font=ctk.CTkFont(size=12, weight="bold"))
+        lbl_ano_v.grid(row=0, column=1, sticky="e", padx=(0, 6))
+
+        self.opt_filtro_vendas_ano = ctk.CTkOptionMenu(
+            sub1_box,
+            values=["Todos"],
+            command=self._on_vendas_ano_filter_changed,
+            width=105,
+            height=32,
+        )
+        self.opt_filtro_vendas_ano.set("Todos")
+        self.opt_filtro_vendas_ano.grid(row=0, column=2, sticky="e", padx=(0, 8))
+
+        self.btn_toggle_vendas_chart = ctk.CTkButton(
+            sub1_box,
+            text="📊 Mostrar Gráfico",
+            command=self._toggle_vendas_chart,
+            height=32,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#374151",
+            hover_color="#4b5563",
+        )
+        self.btn_toggle_vendas_chart.grid(row=0, column=3, sticky="e", padx=(0, 8))
+
         btn_pagar_darf = ctk.CTkButton(
             sub1_box, text="🧾 Marcar DARF como Pago", 
             command=self.mark_darf_as_paid,
             height=32, font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#1f7a1f", hover_color="#145214"
         )
-        btn_pagar_darf.grid(row=0, column=1, sticky="e")
+        btn_pagar_darf.grid(row=0, column=4, sticky="e")
+
+        # Gráfico Opcional de Resultado vs. DARF (oculto por padrão para preservar espaço vertical)
+        self.vendas_chart_frame = ctk.CTkFrame(
+            frame, height=165, fg_color="#2b2b2b", corner_radius=8
+        )
+        self.vendas_chart_frame.grid_propagate(False)
 
         tbl_darf_container = ctk.CTkFrame(frame, height=135)
-        tbl_darf_container.grid(row=3, column=0, sticky="nsew", pady=(0, 15))
+        tbl_darf_container.grid(row=4, column=0, sticky="nsew", pady=(0, 12))
         tbl_darf_container.grid_rowconfigure(0, weight=1)
         tbl_darf_container.grid_columnconfigure(0, weight=1)
 
@@ -323,12 +536,13 @@ class InvestApp(ctk.CTk):
         self.tree_darf.column("status_pgto", width=135, minwidth=115)
 
         self._attach_tree_scrollbars(tbl_darf_container, self.tree_darf)
+        self._setup_tree_tags_and_context_menu(self.tree_darf, ticker_col_idx=None)
 
         lbl_sub2 = ctk.CTkLabel(frame, text="🧾 Histórico Detalhado de Vendas", font=ctk.CTkFont(size=15, weight="bold"))
-        lbl_sub2.grid(row=4, column=0, sticky="w", pady=(5, 5))
+        lbl_sub2.grid(row=5, column=0, sticky="w", pady=(5, 5))
 
         tbl_sales_container = ctk.CTkFrame(frame, height=180)
-        tbl_sales_container.grid(row=5, column=0, sticky="nsew")
+        tbl_sales_container.grid(row=6, column=0, sticky="nsew")
         tbl_sales_container.grid_rowconfigure(0, weight=1)
         tbl_sales_container.grid_columnconfigure(0, weight=1)
 
@@ -347,6 +561,7 @@ class InvestApp(ctk.CTk):
             self.tree_sales.column(c, anchor="center" if c in ["data", "ticker", "tipo"] else "e", width=105, minwidth=90)
 
         self._attach_tree_scrollbars(tbl_sales_container, self.tree_sales)
+        self._setup_tree_tags_and_context_menu(self.tree_sales, ticker_col_idx=1)
 
         return frame
 
@@ -360,7 +575,7 @@ class InvestApp(ctk.CTk):
         frame.grid_rowconfigure(4, weight=1)
         frame.grid_rowconfigure(6, weight=2)
 
-        # Cabeçalho com Título e Botão de Consulta de Proventos
+        # Cabeçalho com Título, Filtro de Ano e Botão de Consulta de Proventos
         header_frame = ctk.CTkFrame(frame, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         header_frame.grid_columnconfigure(0, weight=1)
@@ -371,13 +586,26 @@ class InvestApp(ctk.CTk):
         )
         title.grid(row=0, column=0, sticky="w")
 
+        lbl_ano_p = ctk.CTkLabel(header_frame, text="Ano:", font=ctk.CTkFont(size=12, weight="bold"))
+        lbl_ano_p.grid(row=0, column=1, sticky="e", padx=(0, 6))
+
+        self.opt_filtro_proventos_ano = ctk.CTkOptionMenu(
+            header_frame,
+            values=["Todos"],
+            command=self._on_proventos_ano_filter_changed,
+            width=105,
+            height=34,
+        )
+        self.opt_filtro_proventos_ano.set("Todos")
+        self.opt_filtro_proventos_ano.grid(row=0, column=2, sticky="e", padx=(0, 8))
+
         self.btn_refresh_divs = ctk.CTkButton(
             header_frame, text="📡 Buscar Histórico de Proventos", 
             command=self.refresh_dividends_async,
             height=34, font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#145214", hover_color="#0e3a0e"
         )
-        self.btn_refresh_divs.grid(row=0, column=1, sticky="e")
+        self.btn_refresh_divs.grid(row=0, column=3, sticky="e")
 
         # Cards de Resumo de Proventos
         cards_frame = ctk.CTkFrame(frame)
@@ -417,6 +645,7 @@ class InvestApp(ctk.CTk):
         self.tree_proventos_mes.column("yield_mes", anchor="e", width=130, minwidth=110)
 
         self._attach_tree_scrollbars(tbl_month_container, self.tree_proventos_mes)
+        self._setup_tree_tags_and_context_menu(self.tree_proventos_mes, ticker_col_idx=None)
 
         # Tabela 2: Detalhamento por Ativo / Pagamento
         lbl_sub2 = ctk.CTkLabel(frame, text="🧾 Detalhamento por Ativo e Pagamento Oficial", font=ctk.CTkFont(size=15, weight="bold"))
@@ -442,6 +671,7 @@ class InvestApp(ctk.CTk):
         self.tree_proventos_detalhe.column("total_pago", anchor="e", width=140, minwidth=110)
 
         self._attach_tree_scrollbars(tbl_divs_container, self.tree_proventos_detalhe)
+        self._setup_tree_tags_and_context_menu(self.tree_proventos_detalhe, ticker_col_idx=1)
 
         self._render_proventos_chart({})
         return frame
@@ -611,6 +841,7 @@ class InvestApp(ctk.CTk):
         self.tree_historico.bind("<Double-1>", lambda event: self.edit_selected_operation())
 
         self._attach_tree_scrollbars(tbl_container, self.tree_historico)
+        self._setup_tree_tags_and_context_menu(self.tree_historico, ticker_col_idx=2, allow_crud=True)
 
         return frame
 
@@ -689,6 +920,7 @@ class InvestApp(ctk.CTk):
         sorted_txs = sorted(filtered, key=get_sort_key, reverse=self.historico_sort_reverse)
 
         for idx, tx in enumerate(sorted_txs, 1):
+            zebra = "even" if idx % 2 == 0 else "odd"
             self.tree_historico.insert("", "end", iid=str(tx.id), values=(
                 idx,
                 tx.data or "-",
@@ -698,7 +930,7 @@ class InvestApp(ctk.CTk):
                 f"{tx.quantidade:g}",
                 f"R$ {tx.valor_unitario:.2f}",
                 f"R$ {tx.valor_total:.2f}"
-            ))
+            ), tags=(zebra,))
 
     # -------------------------------------------------------------
     # AUXILIARES VISUAIS & DADOS
@@ -715,81 +947,144 @@ class InvestApp(ctk.CTk):
 
         return lbl_val
 
-    def load_data(self):
-        """Carrega transações do Excel e atualiza a interface."""
-        self.transactions = load_transactions_from_excel(DEFAULT_EXCEL_PATH)
-        self.engine.set_transactions(self.transactions)
-        res = self.engine.calculate()
+    def _on_carteira_chart_mode_changed(self, value: str):
+        self.carteira_chart_mode = value
+        if self.charts_visible:
+            self._render_carteira_charts(self._last_wallet, self.live_quotes)
 
-        # 1. Tabela Carteira com Cotações de Mercado B3
+    def _on_carteira_tipo_filter_changed(self, value: str):
+        self.carteira_filter_tipo = value
+        self._populate_carteira_table()
+
+    def _sort_carteira(self, col: str):
+        if self.carteira_sort_col == col:
+            self.carteira_sort_reverse = not self.carteira_sort_reverse
+        else:
+            self.carteira_sort_col = col
+            self.carteira_sort_reverse = False
+
+        col_names = {
+            "ticker": "Ativo / Cota",
+            "tipo": "Tipo",
+            "quantidade": "Qtd",
+            "preco_medio": "Preço Médio (PM)",
+            "preco_atual": "Preço Atual (B3)",
+            "total_investido": "Total Investido",
+            "patrimonio_atual": "Patrimônio Atual",
+            "lucro_prej": "Lucro/Prejuízo",
+            "rentabilidade": "Rentab. (%)",
+        }
+        for c, base_title in col_names.items():
+            if c == self.carteira_sort_col:
+                arrow = " ▲" if not self.carteira_sort_reverse else " ▼"
+                self.tree_carteira.heading(c, text=f"{base_title}{arrow}")
+            else:
+                self.tree_carteira.heading(c, text=f"{base_title} ↕")
+
+        self._populate_carteira_table()
+
+    def _populate_carteira_table(self):
         for item in self.tree_carteira.get_children():
             self.tree_carteira.delete(item)
 
-        total_investido_carteira = 0.0
-        patrimonio_total_mercado = 0.0
+        wallet = self._last_calc_res.get("wallet", {})
+        linhas = []
+        for ticker, data in wallet.items():
+            tipo_upper = data["tipo_ativo"].upper()
+            if self.carteira_filter_tipo != "Todos" and tipo_upper != self.carteira_filter_tipo:
+                continue
 
-        for ticker, data in sorted(res['wallet'].items()):
-            qtd = data['quantidade']
-            investido = data['total_investido']
-            total_investido_carteira += investido
-
-            # Verifica se temos cotação de mercado para esse ativo
+            qtd = data["quantidade"]
+            investido = data["total_investido"]
             quote_data = self.live_quotes.get(ticker)
             if quote_data and quote_data.get("price") is not None:
                 cur_price = quote_data["price"]
                 cur_val = qtd * cur_price
                 lucro_prej = cur_val - investido
                 rentab = ((cur_val - investido) / investido * 100) if investido > 0 else 0.0
-                patrimonio_total_mercado += cur_val
-
                 str_preco_atual = f"R$ {cur_price:.2f}"
                 str_patrimonio = f"R$ {cur_val:.2f}"
                 str_lucro_prej = f"{'+' if lucro_prej >= 0 else '-'}R$ {abs(lucro_prej):.2f}"
                 str_rentab = f"{rentab:+.2f}%"
             else:
-                patrimonio_total_mercado += investido
+                cur_price = 0.0
+                cur_val = investido
+                lucro_prej = 0.0
+                rentab = 0.0
                 str_preco_atual = "Consultando..."
                 str_patrimonio = f"R$ {investido:.2f}"
                 str_lucro_prej = "R$ 0,00"
                 str_rentab = "0.00%"
 
-            self.tree_carteira.insert("", "end", values=(
-                data['ticker'],
-                data['tipo_ativo'].upper(),
-                f"{qtd:g}",
-                f"R$ {data['preco_medio']:.2f}",
-                str_preco_atual,
-                f"R$ {investido:.2f}",
-                str_patrimonio,
-                str_lucro_prej,
-                str_rentab
-            ))
+            linhas.append({
+                "ticker": data["ticker"],
+                "tipo": tipo_upper,
+                "quantidade": qtd,
+                "preco_medio": data["preco_medio"],
+                "preco_atual": cur_price,
+                "total_investido": investido,
+                "patrimonio_atual": cur_val,
+                "lucro_prej": lucro_prej,
+                "rentabilidade": rentab,
+                "values": (
+                    data["ticker"],
+                    tipo_upper,
+                    f"{qtd:g}",
+                    f"R$ {data['preco_medio']:.2f}",
+                    str_preco_atual,
+                    f"R$ {investido:.2f}",
+                    str_patrimonio,
+                    str_lucro_prej,
+                    str_rentab,
+                ),
+            })
 
-        lucro_total_carteira = patrimonio_total_mercado - total_investido_carteira
-        rentab_total_carteira = ((lucro_total_carteira / total_investido_carteira) * 100) if total_investido_carteira > 0 else 0.0
+        sort_col = self.carteira_sort_col
+        linhas.sort(key=lambda r: r.get(sort_col, r["ticker"]), reverse=self.carteira_sort_reverse)
 
-        self.card_total_investido.configure(text=f"R$ {total_investido_carteira:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-        self.card_patrimonio_atual.configure(text=f"R$ {patrimonio_total_mercado:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-        self.card_lucro_total.configure(
-            text=f"{'+' if lucro_total_carteira >= 0 else '-'}R$ {abs(lucro_total_carteira):,.2f} ({rentab_total_carteira:+.2f}%)".replace(",", "X").replace(".", ",").replace("X", ".")
-        )
+        for idx, row in enumerate(linhas):
+            tags = ["even" if idx % 2 == 0 else "odd"]
+            if row["lucro_prej"] > 0.005:
+                tags.append("profit")
+            elif row["lucro_prej"] < -0.005:
+                tags.append("loss")
+            self.tree_carteira.insert("", "end", values=row["values"], tags=tuple(tags))
 
-        self._last_wallet = res['wallet']
-        if self.charts_visible:
-            self._render_carteira_charts(res['wallet'], self.live_quotes)
+    def _on_vendas_ano_filter_changed(self, value: str):
+        self.vendas_filter_ano = value
+        self._populate_vendas_tables()
+        if self.vendas_chart_visible:
+            self._render_vendas_chart()
 
-        # 2. Resumo DARF (com controle de DARFs pagos)
+    def _toggle_vendas_chart(self):
+        self.vendas_chart_visible = not self.vendas_chart_visible
+        if self.vendas_chart_visible:
+            self.vendas_chart_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
+            self.btn_toggle_vendas_chart.configure(text="📊 Ocultar Gráfico")
+            self._render_vendas_chart()
+        else:
+            self.vendas_chart_frame.grid_forget()
+            self.btn_toggle_vendas_chart.configure(text="📊 Mostrar Gráfico")
+
+    def _render_vendas_chart(self):
+        reports = self._filtered_tax_reports()
+        fig_vendas = create_sales_darf_summary_figure(reports)
+        self._render_figure_in_container(self.vendas_chart_frame, fig_vendas, "vendas_darf")
+
+    def _filtered_tax_reports(self):
+        reports = self._last_calc_res.get("tax_reports", [])
+        if self.vendas_filter_ano == "Todos":
+            return reports
+        return [t for t in reports if t.mes_ano.endswith(f"/{self.vendas_filter_ano}")]
+
+    def _populate_vendas_tables(self):
+        res = self._last_calc_res
         for item in self.tree_darf.get_children():
             self.tree_darf.delete(item)
 
         paid_darfs = load_paid_darfs(DEFAULT_EXCEL_PATH)
-        ultimo_prejuizo_fii = 0.0
-
-        for tax in res['tax_reports']:
-            ultimo_prejuizo_fii = tax.prejuizo_restante_acumulado
+        for idx, tax in enumerate(self._filtered_tax_reports()):
             status_darf = f"R$ {tax.imposto_devido:.2f}"
-            
-            # Chave de busca de pagamento
             key_pgto = (tax.mes_ano, tax.tipo_ativo.lower())
             esta_pago = key_pgto in paid_darfs
 
@@ -811,7 +1106,14 @@ class InvestApp(ctk.CTk):
             if tax.resultado_liquido < 0:
                 res_formatado = f"-R$ {abs(tax.resultado_liquido):.2f}"
 
-            # Identificador único para a linha: MES__TIPO
+            tags = ["even" if idx % 2 == 0 else "odd"]
+            if "Pendente" in status_pgto:
+                tags.append("warning")
+            elif "Pago" in status_pgto:
+                tags.append("profit")
+            elif tax.resultado_liquido < 0:
+                tags.append("loss")
+
             iid = f"{tax.mes_ano}__{tax.tipo_ativo.lower()}"
             self.tree_darf.insert("", "end", iid=iid, values=(
                 tax.mes_ano,
@@ -823,18 +1125,25 @@ class InvestApp(ctk.CTk):
                 status_darf,
                 f"R$ {tax.prejuizo_restante_acumulado:.2f}",
                 status_pgto
-            ))
+            ), tags=tuple(tags))
 
-        self.card_prejuizo_acum.configure(text=f"R$ {ultimo_prejuizo_fii:.2f}".replace(".", ","))
-
-        # 3. Tabela Vendas
         for item in self.tree_sales.get_children():
             self.tree_sales.delete(item)
 
-        for s in res['sales']:
+        sales = res.get("sales", [])
+        if self.vendas_filter_ano != "Todos":
+            sales = [s for s in sales if (s.data or "").endswith(f"/{self.vendas_filter_ano}")]
+
+        for idx, s in enumerate(sales):
             res_val = f"R$ {s.lucro_prejuizo:.2f}"
             if s.lucro_prejuizo < 0:
                 res_val = f"-R$ {abs(s.lucro_prejuizo):.2f}"
+
+            tags = ["even" if idx % 2 == 0 else "odd"]
+            if s.lucro_prejuizo > 0.005:
+                tags.append("profit")
+            elif s.lucro_prejuizo < -0.005:
+                tags.append("loss")
 
             self.tree_sales.insert("", "end", values=(
                 s.data or "-",
@@ -845,10 +1154,77 @@ class InvestApp(ctk.CTk):
                 f"R$ {s.preco_venda_unitario:.2f}",
                 f"R$ {s.valor_venda_total:.2f}",
                 res_val
-            ))
+            ), tags=tuple(tags))
 
-        # 4. Extrato Completo
+    def load_data(self):
+        """Carrega transações do Excel e atualiza a interface."""
+        self.transactions = load_transactions_from_excel(DEFAULT_EXCEL_PATH)
+        self.engine.set_transactions(self.transactions)
+        res = self.engine.calculate()
+        self._last_calc_res = res
+
+        # 1. Atualiza cards e tabela da Carteira
+        total_investido_carteira = 0.0
+        patrimonio_total_mercado = 0.0
+
+        for ticker, data in res["wallet"].items():
+            qtd = data["quantidade"]
+            investido = data["total_investido"]
+            total_investido_carteira += investido
+
+            quote_data = self.live_quotes.get(ticker)
+            if quote_data and quote_data.get("price") is not None:
+                patrimonio_total_mercado += qtd * quote_data["price"]
+            else:
+                patrimonio_total_mercado += investido
+
+        self._populate_carteira_table()
+
+        lucro_total_carteira = patrimonio_total_mercado - total_investido_carteira
+        rentab_total_carteira = ((lucro_total_carteira / total_investido_carteira) * 100) if total_investido_carteira > 0 else 0.0
+
+        self.card_total_investido.configure(text=f"R$ {total_investido_carteira:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        self.card_patrimonio_atual.configure(text=f"R$ {patrimonio_total_mercado:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        self.card_lucro_total.configure(
+            text=f"{'+' if lucro_total_carteira >= 0 else '-'}R$ {abs(lucro_total_carteira):,.2f} ({rentab_total_carteira:+.2f}%)".replace(",", "X").replace(".", ",").replace("X", ".")
+        )
+
+        self._last_wallet = res["wallet"]
+        if self.charts_visible:
+            self._render_carteira_charts(res["wallet"], self.live_quotes)
+
+        # 2. Atualiza filtro de anos de Vendas & DARF e preenche tabelas
+        anos_vendas = sorted(
+            {
+                t.mes_ano.split("/")[-1]
+                for t in res["tax_reports"]
+                if "/" in (t.mes_ano or "")
+            },
+            reverse=True,
+        )
+        opcoes_anos = ["Todos"] + anos_vendas
+        self.opt_filtro_vendas_ano.configure(values=opcoes_anos)
+        if self.vendas_filter_ano not in opcoes_anos:
+            self.vendas_filter_ano = "Todos"
+            self.opt_filtro_vendas_ano.set("Todos")
+
+        ultimo_prejuizo_fii = (
+            res["tax_reports"][-1].prejuizo_restante_acumulado if res["tax_reports"] else 0.0
+        )
+        self.card_prejuizo_acum.configure(text=f"R$ {ultimo_prejuizo_fii:.2f}".replace(".", ","))
+
+        self._populate_vendas_tables()
+        if self.vendas_chart_visible:
+            self._render_vendas_chart()
+
+        # 3. Extrato Completo
         self._populate_historico_table()
+
+    def _update_sync_status_label(self):
+        if self.is_fetching_quotes or self.is_fetching_dividends:
+            self.lbl_sync_status.configure(text="⏳ Sincronizando B3...", text_color="#fbbf24")
+        else:
+            self.lbl_sync_status.configure(text="✅ B3 sincronizada", text_color="#34d399")
 
     def refresh_quotes_async(self):
         """Dispara a busca de cotações em background sem travar a interface."""
@@ -857,6 +1233,7 @@ class InvestApp(ctk.CTk):
 
         self.is_fetching_quotes = True
         self.btn_refresh_quotes.configure(text="⏳ Atualizando...", state="disabled")
+        self._update_sync_status_label()
 
         def task():
             res = self.engine.calculate()
@@ -872,6 +1249,7 @@ class InvestApp(ctk.CTk):
     def _on_quotes_fetched(self):
         self.is_fetching_quotes = False
         self.btn_refresh_quotes.configure(text="📡 Atualizar Cotações B3", state="normal")
+        self._update_sync_status_label()
         self.load_data()
 
     def refresh_dividends_async(self):
@@ -881,6 +1259,7 @@ class InvestApp(ctk.CTk):
 
         self.is_fetching_dividends = True
         self.btn_refresh_divs.configure(text="⏳ Buscando Proventos...", state="disabled")
+        self._update_sync_status_label()
 
         def task():
             res = self.engine.calculate()
@@ -895,53 +1274,79 @@ class InvestApp(ctk.CTk):
     def _on_dividends_fetched(self):
         self.is_fetching_dividends = False
         self.btn_refresh_divs.configure(text="📡 Buscar Histórico de Proventos", state="normal")
+        self._update_sync_status_label()
         self._update_dividends_view()
+
+    def _on_proventos_ano_filter_changed(self, value: str):
+        self.proventos_filter_ano = value
+        self._populate_proventos_tables()
 
     def _update_dividends_view(self):
         """Calcula os proventos com base nas cotas do usuário e preenche as tabelas."""
+        todos_pagamentos, mensal_stats = calculate_historical_dividends(
+            self.transactions, self.dividends_data
+        )
+        self._last_dividends_calc = (todos_pagamentos, mensal_stats)
+
+        anos_prov = sorted(
+            {m.split("/")[-1] for m in mensal_stats.keys() if "/" in m},
+            reverse=True,
+        )
+        opcoes_anos = ["Todos"] + anos_prov
+        self.opt_filtro_proventos_ano.configure(values=opcoes_anos)
+        if self.proventos_filter_ano not in opcoes_anos:
+            self.proventos_filter_ano = "Todos"
+            self.opt_filtro_proventos_ano.set("Todos")
+
+        self._populate_proventos_tables()
+
+    def _populate_proventos_tables(self):
         res = self.engine.calculate()
-        carteira = res['wallet']
+        carteira = res["wallet"]
+        todos_pagamentos, mensal_stats = self._last_dividends_calc
 
         for item in self.tree_proventos_mes.get_children():
             self.tree_proventos_mes.delete(item)
         for item in self.tree_proventos_detalhe.get_children():
             self.tree_proventos_detalhe.delete(item)
 
-        # Cálculo real baseado na posição de cotas que você possuía em cada época
-        todos_pagamentos, mensal_stats = calculate_historical_dividends(
-            self.transactions, self.dividends_data
-        )
+        ano_filtro = self.proventos_filter_ano
+        if ano_filtro != "Todos":
+            pagamentos_filtrados = [p for p in todos_pagamentos if str(p.get("data", "")).endswith(f"/{ano_filtro}")]
+            stats_filtradas = {m: st for m, st in mensal_stats.items() if m.endswith(f"/{ano_filtro}")}
+        else:
+            pagamentos_filtrados = todos_pagamentos
+            stats_filtradas = mensal_stats
 
-        for p in todos_pagamentos:
+        for idx, p in enumerate(pagamentos_filtrados):
+            zebra = "even" if idx % 2 == 0 else "odd"
             self.tree_proventos_detalhe.insert("", "end", values=(
                 p["data"],
                 p["ticker"],
                 f"{p['qtd']:g}",
                 f"R$ {p['unit']:.4f}",
                 f"R$ {p['total']:.2f}"
-            ))
+            ), tags=(zebra, "profit"))
 
-        # Preencher tabela mensal
-        meses_ordenados = sorted(mensal_stats.items(), key=lambda x: x[1]["timestamp"], reverse=True)
-        total_historico_recebido = sum(st["total"] for st in mensal_stats.values())
-        
-        # Últimos 12 meses para cálculo de média e yield anual
+        meses_ordenados = sorted(stats_filtradas.items(), key=lambda x: x[1]["timestamp"], reverse=True)
+        total_historico_recebido = sum(st["total"] for st in stats_filtradas.values())
+
         meses_12m = meses_ordenados[:12]
         total_12m = sum(st["total"] for _, st in meses_12m)
+        total_investido_carteira = sum(d["total_investido"] for d in carteira.values())
 
-        total_investido_carteira = sum(d['total_investido'] for d in carteira.values())
-
-        for mes_ano, st in meses_ordenados:
+        for idx, (mes_ano, st) in enumerate(meses_ordenados):
             total_mes = st["total"]
             qtd_atv = len(st["ativos"])
             yield_mes = (total_mes / total_investido_carteira * 100) if total_investido_carteira > 0 else 0.0
+            zebra = "even" if idx % 2 == 0 else "odd"
 
             self.tree_proventos_mes.insert("", "end", values=(
                 mes_ano,
                 f"R$ {total_mes:.2f}",
                 f"{qtd_atv} ativo(s)",
                 f"{yield_mes:.2f}%"
-            ))
+            ), tags=(zebra,))
 
         media_mensal = (total_12m / len(meses_12m)) if meses_12m else 0.0
         yield_anual = (total_12m / total_investido_carteira * 100) if total_investido_carteira > 0 else 0.0
@@ -949,7 +1354,7 @@ class InvestApp(ctk.CTk):
         self.card_total_proventos.configure(text=f"R$ {total_historico_recebido:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         self.card_media_mensal.configure(text=f"R$ {media_mensal:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         self.card_yield_medio.configure(text=f"{yield_anual:.2f}% a.a.")
-        self._render_proventos_chart(mensal_stats)
+        self._render_proventos_chart(stats_filtradas)
 
     def _render_figure_in_container(self, container, figure, slot_key: str):
         """Renderiza uma Figure Matplotlib em um container CTkFrame fechando a figura anterior."""
@@ -962,6 +1367,7 @@ class InvestApp(ctk.CTk):
 
         canvas = FigureCanvasTkAgg(figure, master=container)
         canvas.draw()
+        attach_matplotlib_tooltip(canvas, figure)
         widget = canvas.get_tk_widget()
         widget.pack(fill="both", expand=True, padx=4, pady=4)
         self._chart_figures[slot_key] = figure
@@ -970,7 +1376,7 @@ class InvestApp(ctk.CTk):
         """Alterna a exibição do painel de gráficos da Carteira Atual."""
         self.charts_visible = not self.charts_visible
         if self.charts_visible:
-            self.carteira_charts_frame.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+            self.carteira_charts_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
             self.btn_toggle_charts.configure(text="📊 Ocultar Gráficos")
             self._render_carteira_charts(self._last_wallet, self.live_quotes)
         else:
@@ -978,11 +1384,14 @@ class InvestApp(ctk.CTk):
             self.btn_toggle_charts.configure(text="📊 Mostrar Gráficos")
 
     def _render_carteira_charts(self, wallet: dict, live_quotes: dict):
-        """Atualiza os gráficos de alocação por classe e distribuição por ativo."""
+        """Atualiza os gráficos de alocação por classe e distribuição/rentabilidade por ativo."""
         fig_class = create_allocation_by_class_figure(wallet, live_quotes)
         self._render_figure_in_container(self.chart_class_container, fig_class, "carteira_class")
 
-        fig_ticker = create_allocation_by_ticker_figure(wallet, live_quotes)
+        if self.carteira_chart_mode == "Rentabilidade":
+            fig_ticker = create_profitability_by_ticker_figure(wallet, live_quotes)
+        else:
+            fig_ticker = create_allocation_by_ticker_figure(wallet, live_quotes)
         self._render_figure_in_container(self.chart_ticker_container, fig_ticker, "carteira_ticker")
 
     def _render_proventos_chart(self, mensal_stats: dict):
