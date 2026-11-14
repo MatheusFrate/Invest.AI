@@ -1,0 +1,399 @@
+"""
+Testes unitários headless para o módulo de geração de gráficos Matplotlib (charts.py).
+"""
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+from matplotlib.figure import Figure
+import pytest
+
+from invest_ai.ui.charts import (
+    create_allocation_by_class_figure,
+    create_allocation_by_ticker_figure,
+    create_monthly_dividends_figure,
+    create_profitability_by_ticker_figure,
+    create_sales_darf_summary_figure,
+    create_total_return_pct_figure,
+    create_total_return_breakdown_figure,
+    attach_matplotlib_tooltip,
+)
+
+
+def test_create_allocation_by_class_figure_com_dados_e_vazio():
+    wallet = {
+        "MXRF11": {"quantidade": 100.0, "total_investido": 950.0, "tipo_ativo": "fii"},
+        "PETR4": {"quantidade": 20.0, "total_investido": 700.0, "tipo_ativo": "ação"},
+        "IVVB11": {"quantidade": 2.0, "total_investido": 600.0, "tipo_ativo": "etf"},
+    }
+    live_quotes = {
+        "MXRF11": {"price": 10.0},  # 1000.0
+        "PETR4": {"price": 40.0},   # 800.0
+        # IVVB11 sem cotação viva -> usa fallback total_investido (600.0)
+    }
+
+    fig = create_allocation_by_class_figure(wallet, live_quotes)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Alocação por Classe"
+    assert len(ax.patches) == 3  # 3 classes: FII, AÇÃO, ETF
+
+    legend = ax.get_legend()
+    assert legend is not None
+    legend_texts = [t.get_text() for t in legend.get_texts()]
+    assert any("FII" in txt and "1.000,00" in txt for txt in legend_texts)
+    assert any("AÇÃO" in txt and "800,00" in txt for txt in legend_texts)
+    assert any("ETF" in txt and "600,00" in txt for txt in legend_texts)
+
+    # Caso vazio
+    fig_vazia = create_allocation_by_class_figure({})
+    assert isinstance(fig_vazia, Figure)
+    ax_vazia = fig_vazia.axes[0]
+    assert any("Sem ativos em custódia" in t.get_text() for t in ax_vazia.texts)
+
+
+def test_create_allocation_by_ticker_figure_top_n_e_outros():
+    wallet = {
+        f"ATV{i}11": {"quantidade": 10.0, "total_investido": float((10 - i) * 100), "tipo_ativo": "fii"}
+        for i in range(1, 7)  # 6 ativos: 900, 800, 700, 600, 500, 400
+    }
+
+    fig = create_allocation_by_ticker_figure(wallet, top_n=4)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Distribuição por Ativo (%)"
+
+    y_labels = [lbl.get_text() for lbl in ax.get_yticklabels()]
+    assert "OUTROS" in y_labels
+    assert len(y_labels) == 5  # top 4 + OUTROS
+    # Maior ativo deve ficar no topo do eixo Y (último tick em barh)
+    assert y_labels[-1] == "ATV111"
+
+    # Caso vazio
+    fig_vazia = create_allocation_by_ticker_figure({})
+    ax_vazia = fig_vazia.axes[0]
+    assert any("Sem ativos em custódia" in t.get_text() for t in ax_vazia.texts)
+
+
+def test_create_monthly_dividends_figure_ordenacao_cronologica_e_vazio():
+    mensal_stats = {
+        "10/2026": {"total": 125.50, "ativos": {"MXRF11"}, "timestamp": 1790812800},
+        "08/2026": {"total": 80.00, "ativos": {"MXRF11"}, "timestamp": 1785542400},
+        "09/2026": {"total": 95.25, "ativos": {"MXRF11", "RZAG11"}, "timestamp": 1788220800},
+    }
+
+    fig = create_monthly_dividends_figure(mensal_stats, max_months=12)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Evolução Mensal de Proventos (R$)"
+
+    x_labels = [lbl.get_text() for lbl in ax.get_xticklabels()]
+    assert x_labels == ["08/2026", "09/2026", "10/2026"]
+
+    bar_heights = [rect.get_height() for rect in ax.patches]
+    assert bar_heights == pytest.approx([80.00, 95.25, 125.50])
+
+    # Caso vazio
+    fig_vazia = create_monthly_dividends_figure({})
+    ax_vazia = fig_vazia.axes[0]
+    assert any("Sem proventos registrados" in t.get_text() for t in ax_vazia.texts)
+
+
+def test_attach_tree_scrollbars_configures_x_and_y_scroll(monkeypatch):
+    from unittest.mock import MagicMock
+    from invest_ai.ui import base_window
+
+    created_scrollbars = []
+
+    class FakeScrollbar:
+        def __init__(self, parent, orient=None, command=None):
+            self.parent = parent
+            self.orient = orient
+            self.command = command
+            self.set = MagicMock()
+            self.grid = MagicMock()
+            created_scrollbars.append(self)
+
+    monkeypatch.setattr(base_window.ttk, "Scrollbar", FakeScrollbar)
+
+    container = MagicMock()
+    tree = MagicMock()
+
+    app = base_window.InvestApp.__new__(base_window.InvestApp)
+    app._attach_tree_scrollbars(container, tree)
+
+    container.grid_rowconfigure.assert_called_once_with(0, weight=1)
+    container.grid_columnconfigure.assert_called_once_with(0, weight=1)
+
+    assert len(created_scrollbars) == 2
+    y_sb, x_sb = created_scrollbars
+    assert y_sb.orient == "vertical"
+    assert y_sb.command is tree.yview
+    assert x_sb.orient == "horizontal"
+    assert x_sb.command is tree.xview
+
+    tree.configure.assert_called_once_with(yscrollcommand=y_sb.set, xscrollcommand=x_sb.set)
+    tree.grid.assert_called_once_with(row=0, column=0, sticky="nsew")
+    y_sb.grid.assert_called_once_with(row=0, column=1, sticky="ns")
+    x_sb.grid.assert_called_once_with(row=1, column=0, sticky="ew")
+
+
+def test_create_profitability_by_ticker_figure_positivo_negativo_e_vazio():
+    wallet = {
+        "MXRF11": {"quantidade": 100.0, "total_investido": 1000.0, "tipo_ativo": "fii"},
+        "PETR4": {"quantidade": 10.0, "total_investido": 400.0, "tipo_ativo": "ação"},
+    }
+    live_quotes = {
+        "MXRF11": {"price": 11.0},  # +10%
+        "PETR4": {"price": 32.0},   # -20%
+    }
+
+    fig = create_profitability_by_ticker_figure(wallet, live_quotes)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Rentabilidade por Ativo (%)"
+    y_labels = [lbl.get_text() for lbl in ax.get_yticklabels()]
+    assert y_labels == ["PETR4", "MXRF11"]
+    widths = [rect.get_width() for rect in ax.patches]
+    assert widths == pytest.approx([-20.0, 10.0])
+
+    # Caso vazio
+    fig_vazia = create_profitability_by_ticker_figure({})
+    ax_vazia = fig_vazia.axes[0]
+    assert any("Sem ativos em custódia" in t.get_text() for t in ax_vazia.texts)
+
+
+def test_create_sales_darf_summary_figure_com_dados_e_vazio():
+    from invest_ai.core.engine import MonthlyTaxReport
+
+    reports = [
+        MonthlyTaxReport(
+            mes_ano="07/2026",
+            tipo_ativo="fii",
+            vendas_total=500.0,
+            resultado_liquido=-50.0,
+            prejuizo_anterior_compensado=0.0,
+            base_calculo=0.0,
+            imposto_devido=0.0,
+            prejuizo_restante_acumulado=50.0,
+            isento=False,
+        ),
+        MonthlyTaxReport(
+            mes_ano="10/2026",
+            tipo_ativo="fii",
+            vendas_total=1200.0,
+            resultado_liquido=200.0,
+            prejuizo_anterior_compensado=50.0,
+            base_calculo=150.0,
+            imposto_devido=30.0,
+            prejuizo_restante_acumulado=0.0,
+            isento=False,
+        ),
+    ]
+
+    fig = create_sales_darf_summary_figure(reports)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Resumo Mensal: Resultado vs. DARF (R$)"
+    x_labels = [lbl.get_text() for lbl in ax.get_xticklabels()]
+    assert x_labels == ["07/2026", "10/2026"]
+    # 2 barras por mês (Resultado e DARF) = 4 patches
+    assert len(ax.patches) == 4
+
+    # Caso vazio
+    fig_vazio = create_sales_darf_summary_figure([])
+    ax_vazio = fig_vazio.axes[0]
+    assert any("Sem vendas apuradas" in t.get_text() for t in ax_vazio.texts)
+
+
+def test_attach_matplotlib_tooltip_registra_evento():
+    from unittest.mock import MagicMock
+
+    wallet = {"MXRF11": {"quantidade": 10.0, "total_investido": 100.0, "tipo_ativo": "fii"}}
+    fig = create_allocation_by_ticker_figure(wallet)
+    canvas = MagicMock()
+    canvas.mpl_connect.return_value = 42
+
+    cid = attach_matplotlib_tooltip(canvas, fig)
+    assert cid == 42
+    canvas.mpl_connect.assert_called_once()
+    args, _ = canvas.mpl_connect.call_args
+    assert args[0] == "motion_notify_event"
+    assert callable(args[1])
+
+
+def test_create_total_return_pct_figure_soma_cota_e_proventos():
+    wallet = {
+        "MXRF11": {"quantidade": 100.0, "total_investido": 1000.0, "tipo_ativo": "fii"},
+        "IRIM11": {"quantidade": 10.0, "total_investido": 1000.0, "tipo_ativo": "fii"},
+    }
+    live_quotes = {
+        "MXRF11": {"price": 9.5},   # cota: -50 (-5%)
+        "IRIM11": {"price": 105.0}, # cota: +50 (+5%)
+    }
+    proventos = {
+        "MXRF11": 150.0,  # +15% -> total +10% (+100)
+        "IRIM11": 100.0,  # +10% -> total +15% (+150)
+    }
+
+    fig = create_total_return_pct_figure(wallet, live_quotes, proventos)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Retorno Total por Ativo (%)"
+    y_labels = [lbl.get_text() for lbl in ax.get_yticklabels()]
+    assert y_labels == ["MXRF11", "IRIM11"]
+    widths = [rect.get_width() for rect in ax.patches]
+    assert widths == pytest.approx([10.0, 15.0])
+
+    # Caso vazio
+    fig_vazio = create_total_return_pct_figure({})
+    ax_vazio = fig_vazio.axes[0]
+    assert any("Sem ativos em custódia" in t.get_text() for t in ax_vazio.texts)
+
+
+def test_create_total_return_breakdown_figure_com_dados_e_vazio():
+    wallet = {
+        "MXRF11": {"quantidade": 100.0, "total_investido": 1000.0, "tipo_ativo": "fii"},
+        "PETR4": {"quantidade": 10.0, "total_investido": 400.0, "tipo_ativo": "ação"},
+    }
+    live_quotes = {
+        "MXRF11": {"price": 9.5},  # -50 cota
+        "PETR4": {"price": 45.0},  # +50 cota
+    }
+    proventos = {"MXRF11": 120.0, "PETR4": 40.0}
+
+    fig = create_total_return_breakdown_figure(wallet, live_quotes, proventos)
+    assert isinstance(fig, Figure)
+    ax = fig.axes[0]
+    assert ax.get_title() == "Composição: Cota vs. Proventos (R$)"
+    # 2 ativos * 2 barras (Valorização + Proventos) = 4 patches
+    assert len(ax.patches) == 4
+
+    fig_vazio = create_total_return_breakdown_figure({})
+    ax_vazio = fig_vazio.axes[0]
+    assert any("Sem ativos em custódia" in t.get_text() for t in ax_vazio.texts)
+
+
+def test_chart_themes_dark_and_light():
+    from matplotlib.colors import to_hex
+    from invest_ai.ui.charts import get_chart_theme, BG_COLOR
+
+    dark = get_chart_theme("dark")
+    light = get_chart_theme("light")
+    assert dark["bg"] == BG_COLOR == "#1e293b"
+    assert light["bg"] == "#ffffff"
+
+    wallet = {"MXRF11": {"quantidade": 10.0, "total_investido": 100.0, "tipo_ativo": "fii"}}
+    fig_dark = create_allocation_by_class_figure(wallet, theme="dark")
+    fig_light = create_allocation_by_class_figure(wallet, theme="light")
+
+    assert to_hex(fig_dark.get_facecolor()) == "#1e293b"
+    assert to_hex(fig_light.get_facecolor()) == "#ffffff"
+    assert any("100,00" in t.get_text() for t in fig_dark.axes[0].texts)
+
+
+def test_attach_matplotlib_tooltip_hover_updates_visibility():
+    from unittest.mock import MagicMock
+
+    wallet = {"MXRF11": {"quantidade": 10.0, "total_investido": 100.0, "tipo_ativo": "fii"}}
+    fig = create_allocation_by_ticker_figure(wallet, theme="light")
+    canvas = MagicMock()
+    callbacks = {}
+
+    def fake_connect(event_name, cb):
+        callbacks[event_name] = cb
+        return 7
+
+    canvas.mpl_connect.side_effect = fake_connect
+    cid = attach_matplotlib_tooltip(canvas, fig)
+    assert cid == 7
+    assert "motion_notify_event" in callbacks
+
+    ax = fig.axes[0]
+    bar = ax.patches[0]
+    event = MagicMock()
+    event.inaxes = ax
+    # Simula cursor fora da barra (axes diferente) -> não falha e mantém oculto
+    event.inaxes = None
+    callbacks["motion_notify_event"](event)
+    assert hasattr(bar, "_tooltip_text")
+    assert "MXRF11" in bar._tooltip_text
+
+
+def test_create_stat_card_compact_accent_bar(monkeypatch):
+    from unittest.mock import MagicMock
+    from invest_ai.ui import base_window
+
+    created_frames = []
+
+    class FakeFrame:
+        def __init__(self, master=None, **kwargs):
+            self.master = master
+            self.kwargs = kwargs
+            self.grid = MagicMock()
+            self.grid_columnconfigure = MagicMock()
+            self.grid_rowconfigure = MagicMock()
+            created_frames.append(self)
+
+    class FakeLabel:
+        def __init__(self, master=None, **kwargs):
+            self.master = master
+            self.kwargs = kwargs
+            self.grid = MagicMock()
+
+    monkeypatch.setattr(base_window.ctk, "CTkFrame", FakeFrame)
+    monkeypatch.setattr(base_window.ctk, "CTkLabel", FakeLabel)
+    monkeypatch.setattr(base_window.ctk, "CTkFont", lambda *a, **kw: ("Segoe UI", 12))
+
+    app = base_window.InvestApp.__new__(base_window.InvestApp)
+    parent = MagicMock()
+    lbl_val = app._create_stat_card(parent, 0, "TOTAL INVESTIDO", "R$ 100,00", "#3b82f6")
+
+    assert lbl_val is not None
+    assert len(created_frames) == 2
+    card, accent_bar = created_frames
+    assert card.kwargs.get("corner_radius") == 10
+    card.grid_rowconfigure.assert_not_called()
+    assert accent_bar.kwargs.get("height") is not None
+    assert accent_bar.kwargs["height"] <= 48
+
+
+def test_configure_treeview_style_removes_white_borders(monkeypatch):
+    from unittest.mock import MagicMock
+    from invest_ai.ui import base_window
+
+    fake_style = MagicMock()
+    monkeypatch.setattr(base_window.ttk, "Style", lambda master=None: fake_style)
+
+    app = base_window.InvestApp.__new__(base_window.InvestApp)
+    app.tk = None
+    app._is_dark_mode = lambda: True
+    app._configure_treeview_style()
+
+    fake_style.layout.assert_called_once_with(
+        "Treeview", [("Treeview.treearea", {"sticky": "nswe"})]
+    )
+
+    configured = {
+        call.args[0]: call.kwargs
+        for call in fake_style.configure.call_args_list
+    }
+    assert configured["Treeview"]["borderwidth"] == 0
+    assert configured["Treeview"]["relief"] == "flat"
+    assert configured["Treeview"]["lightcolor"] == "#1e293b"
+    assert configured["Treeview"]["darkcolor"] == "#1e293b"
+    assert configured["Treeview"]["bordercolor"] == "#1e293b"
+
+    assert configured["Treeview.Heading"]["lightcolor"] == "#0f172a"
+    assert configured["Treeview.Heading"]["darkcolor"] == "#0f172a"
+    assert configured["Treeview.Heading"]["bordercolor"] == "#0f172a"
+
+    for sb in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+        assert configured[sb]["borderwidth"] == 0
+        assert configured[sb]["gripcount"] == 0
+        assert configured[sb]["lightcolor"] == "#0f172a"
+        assert configured[sb]["darkcolor"] == "#0f172a"
+        assert configured[sb]["bordercolor"] == "#0f172a"
+
+
